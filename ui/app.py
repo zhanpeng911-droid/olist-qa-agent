@@ -101,19 +101,22 @@ st.markdown("## ⚠️ Demo 原型界面 — **非最终 UI**")
 st.caption("从简实现，用于开发测试与演示；核心逻辑见 `agent_core/`，正式界面后续独立设计。")
 
 
-@st.cache_resource
+# 注意：SampleProvider 内部是 SQLite 内存连接，不能跨线程复用（Streamlit rerun 可能换线程）。
+# 因此不缓存 provider，每次新建并关闭；样例数据加载很快，开销可接受。
 def _provider():
     return SampleProvider()
 
 
-@st.cache_resource
 def _semantic():
     return SemanticLayer()
 
 
-@st.cache_data(show_spinner=False)
 def _attribution():
-    return run_attribution(_provider(), _semantic())
+    p = _provider()
+    try:
+        return run_attribution(p, _semantic())
+    finally:
+        p.close()
 
 
 def render_attribution(q: str, res: dict) -> None:
@@ -188,8 +191,12 @@ if q:
                                "args": {"table": "mart_order_delivery",
                                         "metrics": ["low_score_rate"]}},
                     answer="（Mock 演示）已调用 query_mart 查询低评分率。")
-            loop = ReActLoop(llm, _provider(), _semantic())
-            res = loop.run(q)
+            p = _provider()
+            try:
+                loop = ReActLoop(llm, p, _semantic())
+                res = loop.run(q)
+            finally:
+                p.close()
             render_answer(q, res.get("answer", ""))
             st.session_state.history.append(
                 ("assistant", res.get("answer", "") or "（未得到答案）"))
