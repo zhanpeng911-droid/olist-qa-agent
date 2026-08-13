@@ -298,3 +298,28 @@ M4 覆盖：建议结构/可执行性/证据对应/无未验证建议 + 安全�
 ### 12.5 真调评测（可选）
 - `tests/run_eval_live.py` 未编写（本次仅确定性评测）；如需真调，有 key 时对代表性问题跑 ReAct 并记录到此节
 
+---
+
+## 13. Demo UI（⚠ 非最终界面）
+
+> 日期：2026-08-13
+> 定位：**Demo 原型界面，非最终 UI**，从简，仅用于开发测试与演示
+
+### 13.1 方案
+- 主方案新增 **4.10 展示层 Demo UI**（明确标注非最终界面；正式 UI 后续独立设计）
+- 技术：Streamlit 单文件 `ui/app.py`，核心逻辑零改动（仅薄壳）
+
+### 13.2 实现
+- `ui/app.py`：聊天输入 + 消息流；归因类走确定性流程并结构化渲染（优先级表格/route/统计验证/建议）；问数类走 ReAct（DeepSeek/Mock）；侧边栏 26 题评测按钮
+- 纯展示函数独立（`build_priority_df` 等）便于测试
+
+### 13.3 验证
+- `uv run pytest tests/test_ui.py` → **5 passed**（展示函数 + 归因判定）
+- `import ui.app` 可导入 ✓
+- Streamlit headless 启动冒烟：`/_stcore/health` → `ok`，`http://localhost:8501` 可访问
+
+### 13.4 说明
+- 界面顶部常驻"⚠ Demo 原型界面，非最终 UI"
+- 运行：`uv run streamlit run ui/app.py`
+- 数据源仍为样例数据（MySQL 未接入 UI，真库走 CLI `--db mysql`）
+

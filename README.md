@@ -25,6 +25,9 @@ uv run python tests/run_eval.py
 
 # 4. 交互/演示（未配 key 时用 MockLLM 演示流程）
 uv run python run.py "总体延迟率和低评分率是多少？"
+
+# 5. Demo UI（⚠ 非最终界面，开发测试用）
+uv run streamlit run ui/app.py   # 浏览器打开 http://localhost:8501
 ```
 
 ## 接入 DeepSeek 真调（联调）
