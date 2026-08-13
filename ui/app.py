@@ -16,6 +16,10 @@ if str(ROOT) not in sys.path:
 
 import pandas as pd
 import streamlit as st
+from dotenv import load_dotenv
+
+# 加载项目根 .env（DEEPSEEK_API_KEY / DB 等）
+load_dotenv(ROOT / ".env")
 
 from agent_core.attribution import run_attribution
 from agent_core.data_provider import SampleProvider
@@ -177,7 +181,7 @@ if q:
             from agent_core.loop import ReActLoop
             try:
                 llm = DeepSeekLLM()
-            except RuntimeError as e:
+            except (RuntimeError, ValueError) as e:
                 st.warning(f"{e}；未配置 key，使用 Mock 演示。")
                 llm = MockLLM(
                     tool_call={"tool": "query_mart",
