@@ -1,0 +1,15 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+
+# 环境与密钥
+.env
+
+# 样例数据（可重新生成）
+sample_data/*.csv
+
+# 系统
+.DS_Store
+Thumbs.db

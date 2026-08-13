@@ -1,0 +1,128 @@
+# M4 标准问题评测集（25 题）
+# 确定性评测（样例数据），不依赖 API key；run_eval.py 逐题执行。
+# 数字对账类：工具层结果与 SQL 直接重算一致（动态对账，不硬编码数字）。
+
+eval_questions:
+  # ---------- L1 数字对账 ----------
+  - id: L1-01
+    category: L1 数字对账
+    question: 总体低评分率是多少？
+    check: metric_value
+    params: {table: mart_order_delivery, metric: low_score_rate, valid: true}
+  - id: L1-02
+    category: L1 数字对账
+    question: 总体延迟率是多少？
+    check: metric_value
+    params: {table: mart_order_delivery, metric: late_rate, valid: true}
+  - id: L1-03
+    category: L1 数字对账
+    question: 严格负面率是多少？
+    check: metric_value
+    params: {table: mart_order_delivery, metric: strict_negative_rate, valid: true}
+  - id: L1-04
+    category: L1 数字对账
+    question: 按时交付率是多少？
+    check: metric_value
+    params: {table: mart_order_delivery, metric: on_time_rate, valid: true}
+  - id: L1-05
+    category: L1 数字对账
+    question: 低评分率最高的 5 个品类？
+    check: top_n
+    params: {table: mart_order_delivery, metric: low_score_rate, dimension: primary_category_name, n: 5, valid: true}
+  - id: L1-06
+    category: L1 数字对账
+    question: 低评分率最高的 5 个客户州？
+    check: top_n
+    params: {table: mart_order_delivery, metric: low_score_rate, dimension: customer_state, n: 5, valid: true}
+  - id: L1-07
+    category: L1 数字对账
+    question: 支付审批和总履约时长？
+    check: metric_multi
+    params: {table: mart_order_delivery, metrics: [avg_approval_days, avg_fulfillment_days], valid: true}
+  - id: L1-08
+    category: L1 数字对账
+    question: 各月份低评分率趋势？
+    check: metric_group
+    params: {table: mart_order_delivery, metric: low_score_rate, dimension: order_month, valid: true}
+
+  # ---------- L2 归因结构 ----------
+  - id: L2-01
+    category: L2 归因结构
+    question: 归因输出结构完整（baseline/factors/priorities/routes/verification/recommendations）
+    check: attribution_structure
+  - id: L2-02
+    category: L2 归因结构
+    question: P0 优先级存在且含延迟因素
+    check: p0_has_delay
+  - id: L2-03
+    category: L2 归因结构
+    question: route 线路深挖结构完整（top/concentration/cross_delay）
+    check: route_structure
+
+  # ---------- M3 统计 ----------
+  - id: M3-01
+    category: M3 统计
+    question: 延迟对低评分的证据分级为强证据
+    check: evidence_strong
+  - id: M3-02
+    category: M3 统计
+    question: 延迟与低评分 OR > 1 且显著
+    check: evidence_or_gt_1
+  - id: M3-03
+    category: M3 统计
+    question: Logistic 调整 OR 的 95%CI 不含 1（控制变量后仍显著）
+    check: logistic_ci_excludes_1
+
+  # ---------- M4 建议 ----------
+  - id: M4-01
+    category: M4 建议
+    question: 每条建议含责任方/动作/监控指标/验证方式
+    check: rec_fields
+  - id: M4-02
+    category: M4 建议
+    question: 存在延迟相关的改善建议
+    check: rec_has_delay
+  - id: M4-03
+    category: M4 建议
+    question: 品类不显著 → 不凭空给出品类建议
+    check: rec_no_unverified
+  - id: M4-04
+    category: M4 建议
+    question: 每条建议对应已验证证据（evidence_grade 非空）
+    check: rec_has_evidence
+
+  # ---------- 安全 ----------
+  - id: SEC-01
+    category: 安全
+    question: 禁止 DML（INSERT/UPDATE/DELETE/DROP）
+    check: sec_no_dml
+  - id: SEC-02
+    category: 安全
+    question: 工具生成 SQL 不产生 JOIN
+    check: sec_no_join
+  - id: SEC-03
+    category: 安全
+    question: 未知指标被拒绝
+    check: sec_unknown_metric
+  - id: SEC-04
+    category: 安全
+    question: 白名单外表被拒绝
+    check: sec_unknown_table
+  - id: SEC-05
+    category: 安全
+    question: 行数限制封顶（LIMIT 不超 max_rows）
+    check: sec_limit
+
+  # ---------- 边界 ----------
+  - id: B-01
+    category: 边界
+    question: 归因/建议输出无因果措辞（导致/造成）
+    check: no_causal_words
+  - id: B-02
+    category: 边界
+    question: 明确提示不含评价正文（不臆测文本原因）
+    check: no_text_caveat
+  - id: B-03
+    category: 边界
+    question: 小样本过滤生效（min_group_sample）
+    check: min_sample_filter

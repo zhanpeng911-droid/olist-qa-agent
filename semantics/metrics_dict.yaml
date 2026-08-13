@@ -1,0 +1,65 @@
+# 语义字典 / 指标字典（唯一真相源）
+# 字段名采用《低评分归因与改善建议Agent搭建思路》标准命名。
+# 模型只能"选"这里预置的指标与维度，不能自己编，以锁死业务口径。
+
+tables:
+  mart_order_delivery:
+    desc: "订单级宽表，一单一行（归因主表）"
+    key: order_id
+    metrics:
+      order_count:          {expr: "COUNT(*)",                    desc: "订单量(去重order_id)"}
+      reviewed_orders:      {expr: "COUNT(*)",                    desc: "有评价订单数(分母)"}
+      low_score_count:      {expr: "SUM(is_low_score)",           desc: "低评分订单数"}
+      low_score_rate:       {expr: "AVG(is_low_score)",           desc: "低评分率(评分<=3)"}
+      strict_negative_rate: {expr: "AVG(is_strict_negative_score)", desc: "严格负面率(评分<=2)"}
+      late_rate:            {expr: "AVG(is_late_delivery)",       desc: "延迟率(实际>预计)"}
+      on_time_rate:         {expr: "1 - AVG(is_late_delivery)",   desc: "按时交付率"}
+      avg_late_days:        {expr: "AVG(late_days)",              desc: "平均延迟天数"}
+      avg_review_score:     {expr: "AVG(review_score)",           desc: "平均评分"}
+      gmv:                  {expr: "SUM(price_total)",            desc: "成交商品金额"}
+      freight_total:        {expr: "SUM(freight_total)",          desc: "运费总额"}
+      payment_total:        {expr: "SUM(payment_value)",          desc: "订单支付总金额"}
+      avg_approval_days:    {expr: "AVG(approval_days)",          desc: "平均支付审批时长"}
+      avg_fulfillment_days: {expr: "AVG(fulfillment_days)",       desc: "平均总履约时长"}
+    dimensions:
+      - customer_state          # 客户州
+      - primary_category_name   # 主要品类
+      - primary_payment_type    # 主要支付方式
+      - delay_bucket            # 延迟分档: 按时/1-3天/4-7天/8-14天/15天+
+      - is_late_delivery        # 是否延迟(0/1)，用于按时vs延迟对比
+      - order_month             # 购买月份(YYYY-MM)，时间趋势
+    filters:
+      valid_sample: "is_delivery_analysis_eligible = 1"   # 履约分析有效样本
+      reviewed_only: "has_review_record = 1"              # 有评价订单（低评分分母）
+
+  mart_order_seller_delivery:
+    desc: "订单-卖家级，一单-卖家一行（卖家/线路归因表）"
+    key: [order_id, seller_id]
+    metrics:
+      record_count: {expr: "COUNT(*)",            desc: "订单-卖家记录数"}
+      low_score_count: {expr: "SUM(is_low_score)", desc: "低评分订单-卖家记录数"}
+      low_score_rate: {expr: "AVG(is_low_score)", desc: "低评分率(评分<=3)"}
+      late_rate:     {expr: "AVG(is_late_delivery)", desc: "延迟率"}
+      seller_price:  {expr: "SUM(seller_price)",  desc: "卖家商品金额合计"}
+    dimensions:
+      - seller_state      # 卖家州
+      - customer_state    # 客户州
+      - route             # 州际线路: 卖家州→客户州
+      - cross_state       # 是否跨州(0/1)
+      - is_multi_seller_order  # 是否多卖家订单(0/1)
+      - is_late_delivery  # 是否延迟(0/1)，用于线路×延迟交叉
+    filters: {}
+
+guards:
+  low_score_definition: "review_score <= 3"
+  strict_negative_definition: "review_score <= 2"
+  reviewed_only: true                     # 低评分分析分母为有评价订单
+  min_group_sample: 100                   # 分组最小样本量（小样本过滤）
+  multi_seller_rule: "卖家/线路分析默认 is_multi_seller_order=0；多卖家订单按 order_id 去重计低评分数，禁止 COUNT(*) 重复计算评价"
+  text_boundary: "当前 mart 表不含评价正文，禁止臆测破损/错发/客服/退款等文本原因"
+  max_rows: 10000
+  forbid_join: true                       # 第一版禁止模型自由连接两张表
+  read_only: true
+  allow_tables:
+    - mart_order_delivery
+    - mart_order_seller_delivery
