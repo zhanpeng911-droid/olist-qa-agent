@@ -99,12 +99,12 @@ const INTENT_LABEL: Record<string, string> = {
 
 function intentLabel(i: string) { return INTENT_LABEL[i] ?? i }
 
-// 按意图给出推荐追问
+// 按意图给出推荐追问（用可执行的具体问题，避免模糊指代触发"未识别"）
 function suggestionsFor(intent: string): string[] {
   const map: Record<string, string[]> = {
-    attribution: ['📊 查看延迟天数的详细评分分布', '🗺️ 查看不同州的关联差异'],
-    statistical: ['📈 查看近 6 个月的趋势变化', '🔍 按品类拆分看相关性'],
-    query: ['📈 查看该指标的月度趋势', '🧮 对比另一个维度的表现'],
+    attribution: ['📊 各客户州的低评分率对比', '🗺️ 各商品品类的低评分率对比'],
+    statistical: ['📈 查看低评分率的月度趋势', '🔍 各商品品类的低评分率对比'],
+    query: ['📈 查看低评分率的月度趋势', '🧮 各客户州的低评分率对比'],
     deep_validation: ['📊 对低评分进行归因', '📈 延迟和低评分是否相关'],
     other: ['📊 对低评分进行归因', '📈 延迟和低评分是否相关'],
   }
@@ -135,7 +135,7 @@ async function send(q?: unknown) {
           ai.running = ''
           // 模糊指代或空结果 → 意图澄清（维度选择）
           const vague = /另一个维度|其他维度|别的维度|换个维度|对比别的|换一个|别的指标|另一种/.test(question)
-          const emptyQ = data?.intent === 'query' && !(data?.display_rows?.length)
+          const emptyQ = ai.intent === 'query' && !(data?.display_rows?.length) && !(data?.rows?.length)
           if (vague || emptyQ) {
             ai.clarify = [
               { label: '🗺️ 按客户所在州对比', prompt: '各客户州的低评分率对比' },
