@@ -22,7 +22,7 @@
           <template v-else>
             <div v-if="m.intent" class="intent-tag">{{ intentLabel(m.intent) }}</div>
             <div v-if="m.running" class="running">{{ m.running }}</div>
-            <div v-if="m.text" class="text">{{ m.text }}</div>
+            <MarkdownText v-if="m.text" :text="m.text" />
             <ResultCard v-if="m.result && m.intent" :intent="m.intent" :d="m.result" />
             <div v-if="m.error" class="error">{{ m.error }}</div>
             <div v-if="m.steps?.length" class="steps">
@@ -79,6 +79,7 @@ import { nextTick, onMounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import { Delete, Promotion } from '@element-plus/icons-vue'
 import { chatStream } from '../api'
+import MarkdownText from '../components/cards/MarkdownText.vue'
 import ResultCard from '../components/cards/ResultCard.vue'
 
 const route = useRoute()
