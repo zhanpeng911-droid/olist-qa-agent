@@ -494,3 +494,29 @@ uv run uvicorn server.main:app --port 8000   # http://127.0.0.1:8000
 ### 23.6 二期（未做）
 - 设置页（数据源/评测）、登录权限与审计、报告导出（PDF/Excel）、DeepSeek 逐 token 流式
 
+---
+
+## 24. 全量数据导入与正式 UI 切换（MySQL 全量）
+
+> 日期：2026-08-17
+> 来源：朋友提供 `olist_ecommerce_20260817_170315` 全量导出（manifest 记录与完整库一致）
+
+### 24.1 全量导入
+- 表/行数：mart_order_delivery **99,441** / mart_order_item_business **112,650** / mart_order_seller_delivery **100,010**
+- 升级 `scripts/import_mart_to_mysql.py`：`--dir` 参数、大文件分批读/分批插入（采样 3000 行推断类型、每批 5000）、表名取文件名
+- 导入到本地 MySQL `olist_ecommerce` 库（.env `DB_NAME` 同步）；item 表名 `mart_order_item_business` 与 MySQLProvider 默认一致
+
+### 24.2 全量归因验证（`--db mysql`）
+- 订单级基准：样本 95,824，低评分率 21.07%；卖家级基准（单卖家）：样本 94,563，20.54%
+- **16+ 因素全部执行**（1000 行样本时跳过的 州/品类/月份/线路 现在全部保留且显著）
+- 是否延迟：OR=13.08（95%CI [12.34, 13.87]）；多卖家 OR=5.91；跨州 OR=1.33
+- 已知非致命告警：statistics.py:310 `overflow encountered in exp`（CI 边界计算），不影响结果
+
+### 24.3 正式 UI 切换
+- `.env` 加 `USE_MYSQL=1` → 后端 `get_provider()` 用 MySQLProvider（olist_ecommerce）
+- 重启后 `/api/meta` 显示 source_label=MySQL，表含 mart_order_item_analysis 视图
+- 看板/对话全部基于全量数据；注意全量归因耗时约 30-90 秒（后续可做缓存优化）
+
+### 24.4 说明
+- 之前 1000 行样本的"州/品类/月份分组不足"问题已随全量解决，看板图表自动补全
+

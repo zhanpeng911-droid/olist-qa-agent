@@ -1,16 +1,20 @@
-"""把 mart CSV 数据集导入本地 MySQL（olist 库）。
+"""把 mart CSV 数据集导入本地 MySQL。
 
-- 源：data/sample/mart_order_delivery.csv / mart_order_seller_delivery.csv / mart_order_item_delivery.csv
-- 目标：MySQL olist 库，同名表
-- 列类型推断：数值列 DOUBLE；日期列 VARCHAR(64)；其余 VARCHAR(255)
-- 幂等：先 DROP 同名表再建（本脚本用于本地测试库）
+- 默认：data/sample 的 3 张演示表
+- 全量：`--dir <导出目录>` 导入完整 mart 表（大文件，分批读 + 分批插入）
+- 列类型推断：采样前 N 行（数值列 DOUBLE / 日期列 VARCHAR / 其余 VARCHAR）
+- 幂等：先 DROP 同名表再建
 
-用法: uv run python scripts/import_mart_to_mysql.py
+用法:
+  uv run python scripts/import_mart_to_mysql.py                          # 演示样本
+  uv run python scripts/import_mart_to_mysql.py --dir <全量CSV目录>      # 全量
 """
 from __future__ import annotations
 
+import argparse
 import csv
 import os
+import sys
 from pathlib import Path
 
 import pymysql
@@ -19,21 +23,12 @@ from dotenv import load_dotenv
 ROOT = Path(__file__).resolve().parent.parent
 load_dotenv(ROOT / ".env")
 
-DATA_DIR = ROOT / "data" / "sample"
-TABLES = [
-    "mart_order_delivery.csv",
-    "mart_order_item_delivery.csv",
-    "mart_order_seller_delivery.csv",
-]
+SAMPLE_DIR = ROOT / "data" / "sample"
+SAMPLE_TABLES = ["mart_order_delivery.csv", "mart_order_item_delivery.csv",
+                 "mart_order_seller_delivery.csv"]
 DATE_HINTS = ("date", "timestamp")
-
-
-def _is_float(v: str) -> bool:
-    try:
-        float(v)
-        return True
-    except (TypeError, ValueError):
-        return False
+TYPE_SAMPLE_ROWS = 3000
+INSERT_BATCH = 5000
 
 
 def _is_missing(v) -> bool:
@@ -43,25 +38,33 @@ def _is_missing(v) -> bool:
     return s == "" or s.upper() in ("NULL", "NONE", "NAN")
 
 
-def _infer_types(headers: list[str], rows: list[dict]) -> dict[str, str]:
+def _is_float(s: str) -> bool:
+    try:
+        float(s)
+        return True
+    except (TypeError, ValueError):
+        return False
+
+
+def _infer_types(headers: list[str], sample: list[dict]) -> dict[str, str]:
     types: dict[str, str] = {}
     for col in headers:
         low = col.lower()
         if any(k in low for k in DATE_HINTS):
             types[col] = "VARCHAR(64)"
             continue
-        non_numeric = [r.get(col) for r in rows
-                       if not _is_missing(r.get(col)) and not _is_float(str(r.get(col)))]
+        non_numeric = [
+            r.get(col) for r in sample
+            if not _is_missing(r.get(col)) and not _is_float(str(r.get(col)))
+        ]
         types[col] = "DOUBLE" if not non_numeric else "VARCHAR(255)"
     return types
 
 
 def _to_sql(v, ctype: str):
-    if v is None:
+    if _is_missing(v):
         return None
     s = str(v).strip()
-    if s == "" or s.upper() in ("NULL", "NONE", "NAN"):
-        return None
     if ctype == "DOUBLE":
         try:
             return float(s)
@@ -70,44 +73,61 @@ def _to_sql(v, ctype: str):
     return s
 
 
-def import_csv(conn, csv_path: Path) -> int:
+def import_csv(conn, csv_path: Path, table: str) -> int:
     with open(csv_path, encoding="utf-8") as f:
         reader = csv.DictReader(f)
-        rows = list(reader)
         headers = reader.fieldnames or []
-    if not rows or not headers:
-        print(f"  跳过空文件: {csv_path.name}")
-        return 0
+        # 采样推断类型
+        sample: list[dict] = []
+        for _ in range(TYPE_SAMPLE_ROWS):
+            try:
+                sample.append(next(reader))
+            except StopIteration:
+                break
+        if not headers:
+            print(f"  跳过空文件: {csv_path.name}")
+            return 0
+        types = _infer_types(headers, sample)
 
-    types = _infer_types(headers, rows)
-    table = csv_path.stem
-    cols = ", ".join(f"`{c}` {types[c]}" for c in headers)
-    with conn.cursor() as cur:
-        cur.execute(f"DROP TABLE IF EXISTS `{table}`")
-        cur.execute(f"CREATE TABLE `{table}` ({cols}) ENGINE=InnoDB "
-                    "DEFAULT CHARSET=utf8mb4")
+        cols = ", ".join(f"`{c}` {types[c]}" for c in headers)
+        with conn.cursor() as cur:
+            cur.execute(f"DROP TABLE IF EXISTS `{table}`")
+            cur.execute(f"CREATE TABLE `{table}` ({cols}) ENGINE=InnoDB "
+                        "DEFAULT CHARSET=utf8mb4")
+        sql = (f"INSERT INTO `{table}` ({', '.join('`'+c+'`' for c in headers)}) "
+               f"VALUES ({', '.join(['%s'] * len(headers))})")
 
-    sql = (f"INSERT INTO `{table}` ({', '.join('`'+c+'`' for c in headers)}) "
-           f"VALUES ({', '.join(['%s'] * len(headers))})")
-    batch = [
-        [_to_sql(r.get(c), types[c]) for c in headers]
-        for r in rows
-    ]
-    with conn.cursor() as cur:
-        for i in range(0, len(batch), 200):
-            cur.executemany(sql, batch[i:i + 200])
-    conn.commit()
-    return len(batch)
+        total = 0
+        batch: list[list] = []
+        for row in sample:
+            batch.append([_to_sql(row.get(c), types[c]) for c in headers])
+        # 继续读取剩余行
+        for row in reader:
+            batch.append([_to_sql(row.get(c), types[c]) for c in headers])
+            if len(batch) >= INSERT_BATCH:
+                with conn.cursor() as cur:
+                    cur.executemany(sql, batch)
+                conn.commit()
+                total += len(batch)
+                batch = []
+        if batch:
+            with conn.cursor() as cur:
+                cur.executemany(sql, batch)
+            conn.commit()
+            total += len(batch)
+    return total
 
 
 def main() -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--dir", help="全量 CSV 目录（不传则用 data/sample 演示样本）")
+    args = ap.parse_args()
+
     host = os.environ.get("DB_HOST", "127.0.0.1")
     port = int(os.environ.get("DB_PORT", "3306"))
     user = os.environ.get("DB_USER", "root")
     password = os.environ.get("DB_PASSWORD", "")
-    database = os.environ.get("DB_NAME", "olist")
-    if not password:
-        print("警告: DB_PASSWORD 为空，root 无密码可能导致认证失败")
+    database = os.environ.get("DB_NAME", "olist_ecommerce")
 
     conn = pymysql.connect(host=host, port=port, user=user,
                            password=password, connect_timeout=10)
@@ -117,13 +137,22 @@ def main() -> int:
                         "DEFAULT CHARSET utf8mb4")
         conn.select_db(database)
         print(f"已连接 {host}:{port}/{database}")
-        for name in TABLES:
-            path = DATA_DIR / name
+
+        if args.dir:
+            d = Path(args.dir)
+            files = sorted(d.glob("mart_order_*.csv"))
+        else:
+            d = SAMPLE_DIR
+            files = [d / n for n in SAMPLE_TABLES]
+
+        for path in files:
             if not path.exists():
-                print(f"  缺少 {name}，跳过")
+                print(f"  缺少 {path.name}，跳过")
                 continue
-            n = import_csv(conn, path)
-            print(f"  {name}: 导入 {n} 行")
+            table = path.stem  # 文件名即表名（mart_order_item_business.csv → mart_order_item_business）
+            print(f"  导入 {path.name} → 表 {table} ...")
+            n = import_csv(conn, path, table)
+            print(f"    ✓ {n} 行")
         with conn.cursor() as cur:
             cur.execute("SHOW TABLES")
             print("当前库表:", [r[0] for r in cur.fetchall()])
@@ -133,4 +162,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    sys.exit(main())
