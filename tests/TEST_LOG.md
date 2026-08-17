@@ -428,3 +428,28 @@ M4 覆盖：建议结构/可执行性/证据对应/无未验证建议 + 安全�
 - P50为5.449秒，P95为88.302秒；全量低评分关联因素分析约88秒，性能长尾可复现。
 - M-16使用网页实际确定性取数路径复测成功：0.585秒、1条SQL、5行结果，说明失败位于模型压力测试路径而非数据库查询。
 
+---
+
+## 22. 本地接入 MySQL 与导入验证（本机操作）
+
+> 日期：2026-08-17
+> 背景：本地合并朋友提交 `208a935` 后，因缺少 `data/sample/*.csv`（.gitignore 忽略未提交）导致测试一度 5 failed + 88 errors。
+
+### 22.1 数据就位
+- 用户提供数据集：`C:\Users\Alexn\Downloads\mart`（3 张 mart 宽表，各 1000 行截取样本；表头已含内部口径列 is_low_score / is_late_delivery / late_days / is_delivery_analysis_eligible 等）
+- 放入 `data/sample/`（ProjectCsvProvider 默认目录）→ 测试恢复全绿：**133 passed, 1 skipped**；确定性评测 **117/117**
+
+### 22.2 导入 MySQL
+- 新增 `scripts/import_mart_to_mysql.py`：读 CSV → 类型推断（数值列 DOUBLE / 日期列 VARCHAR / 其余 VARCHAR）→ 建表导入本地 `olist` 库（幂等 DROP+CREATE）
+- 导入结果：mart_order_delivery / mart_order_item_delivery / mart_order_seller_delivery 各 1000 行
+- 修复 1：pymysql `executemany` 占位符需 `( %s, %s, ... )` 带括号（原先写成裸 `%s, %s` 触发 1064 语法错误）
+- 修复 2：CSV 字面 `"NULL"` 被当字符串入库，`is_cross_state` 报 `int()` 错误 → `_to_sql`/`_infer_types` 将 NULL/NONE/NAN 视为缺失转真正的 NULL
+
+### 22.3 真库归因验证（`--db mysql`）
+- 数据源：完整业务数据库（MySQL）；订单级基准 966 样本、低评分率 22.15%
+- 是否延迟：卡方（Yates）FDR p=1.8e-34，OR=25.67（95%CI [12.8,51.4]）→ 强保留
+- 延迟分档：Cochran-Armitage p=2.1e-31、Spearman ρ=0.40 → 保留
+- 多卖家订单：Fisher OR=9.70（p=0.001）→ 保留
+- 州/品类/月份/卖家州：因达到样本门槛(100)的分组不足而"未执行"——1000 行截取样本所致，非代码问题（全量 9.9 万行可执行）
+- 结论：MySQLProvider 全流程（字段映射/意图/单变量/多变量）正常
+
