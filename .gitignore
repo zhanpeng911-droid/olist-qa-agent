@@ -7,9 +7,13 @@ __pycache__/
 # 环境与密钥
 .env
 
-# 样例数据（可重新生成）
-sample_data/*.csv
+# Mart 截取样本（本地数据，不提交）
+data/sample/mart_order_*.csv
 
 # 系统
 .DS_Store
 Thumbs.db
+streamlit*.log
+logs/*.log
+artifacts/runtime_logs/*.log
+artifacts/evaluations/*.json

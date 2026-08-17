@@ -48,7 +48,34 @@ tables:
       - cross_state       # 是否跨州(0/1)
       - is_multi_seller_order  # 是否多卖家订单(0/1)
       - is_late_delivery  # 是否延迟(0/1)，用于线路×延迟交叉
-    filters: {}
+    filters:
+      valid_sample: "is_delivery_analysis_eligible = 1"
+      reviewed_only: "has_review_record = 1"
+
+  mart_order_item_analysis:
+    desc: "商品项下钻视图，一商品项一行；由商品项表与订单评价字段受控关联"
+    key: [order_id, order_item_id]
+    metrics:
+      item_count:          {expr: "COUNT(*)",                         desc: "商品项记录数（不是订单数）"}
+      distinct_orders:     {expr: "COUNT(DISTINCT order_id)",         desc: "去重订单数"}
+      low_score_orders:    {expr: "COUNT(DISTINCT CASE WHEN is_low_score = 1 THEN order_id END)", desc: "低评分去重订单数"}
+      low_score_rate:      {expr: "COUNT(DISTINCT CASE WHEN is_low_score = 1 THEN order_id END) * 1.0 / NULLIF(COUNT(DISTINCT order_id), 0)", desc: "商品项维度的订单级低评分率"}
+      late_rate:           {expr: "COUNT(DISTINCT CASE WHEN is_late_delivery = 1 THEN order_id END) * 1.0 / NULLIF(COUNT(DISTINCT order_id), 0)", desc: "商品项维度的订单级延迟率"}
+      item_product_value:  {expr: "SUM(item_price)",                  desc: "商品项金额"}
+      item_freight_value:  {expr: "SUM(item_freight_value)",          desc: "商品项运费"}
+      avg_item_freight_ratio: {expr: "AVG(item_freight_ratio)",       desc: "平均商品项运费率"}
+    dimensions:
+      - category_name
+      - product_id
+      - seller_id
+      - seller_state
+      - customer_state
+      - is_cross_state
+      - purchase_month
+      - is_late_delivery
+    filters:
+      valid_sample: "is_delivery_analysis_eligible = 1"
+      reviewed_only: "has_review_record = 1"
 
 guards:
   low_score_definition: "review_score <= 3"
@@ -63,3 +90,4 @@ guards:
   allow_tables:
     - mart_order_delivery
     - mart_order_seller_delivery
+    - mart_order_item_analysis

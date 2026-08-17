@@ -49,7 +49,7 @@ class DeepSeekLLM(LLMClient):
     需要环境变量 DEEPSEEK_API_KEY；可选 DEEPSEEK_BASE_URL / DEEPSEEK_MODEL。
     """
 
-    def __init__(self, model: str | None = None) -> None:
+    def __init__(self, model: str | None = None, timeout: float | None = None) -> None:
         import openai  # 延迟导入，避免无 key 时强依赖
 
         key = os.environ.get("DEEPSEEK_API_KEY")
@@ -57,7 +57,13 @@ class DeepSeekLLM(LLMClient):
             raise ValueError("缺少 DEEPSEEK_API_KEY 环境变量")
         base_url = os.environ.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
         self._model = model or os.environ.get("DEEPSEEK_MODEL", "deepseek-chat")
-        self._client = openai.OpenAI(api_key=key, base_url=base_url)
+        request_timeout = timeout or float(os.environ.get("DEEPSEEK_TIMEOUT_SECONDS", "45"))
+        self._client = openai.OpenAI(
+            api_key=key,
+            base_url=base_url,
+            timeout=request_timeout,
+            max_retries=1,
+        )
 
     def chat(self, messages: list[dict]) -> str:
         resp = self._client.chat.completions.create(
@@ -73,5 +79,5 @@ def create_llm() -> LLMClient:
     if os.environ.get("DEEPSEEK_API_KEY"):
         return DeepSeekLLM()
     raise RuntimeError(
-        "未配置 DEEPSEEK_API_KEY。测试流程请用 MockLLM，或配置 key 后联调 DeepSeek。"
+        "未配置 DeepSeek API 密钥（DEEPSEEK_API_KEY），无法调用大模型"
     )

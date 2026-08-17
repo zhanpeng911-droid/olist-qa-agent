@@ -1,15 +1,15 @@
 [project]
 name = "olist-qa-agent"
 version = "0.1.0"
-requires-python = ">=3.14"
+requires-python = ">=3.12"
 dependencies = [
     "openai>=3.0.0",
-    "pandas>=3.0.5",
+    "pandas>=2.3.0",
     "pymysql>=1.2.0",
-    "pytest>=9.1.1",
+    "pytest>=7.4.0",
     "python-dotenv>=1.2.2",
-    "pyyaml>=6.0.3",
-    "scipy>=1.18.0",
-    "statsmodels>=0.14.6",
-    "streamlit>=1.61.1",
+    "pyyaml>=6.0.1",
+    "scipy>=1.13.0",
+    "statsmodels>=0.14.2",
+    "streamlit>=1.32.0",
 ]

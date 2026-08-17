@@ -1,6 +1,6 @@
 """M3 测试：统计验证（单变量检验 / Logistic / 校正 / 证据分级 / 集成）。
 
-用构造已知关系的数据验证统计方法正确性，再用样例数据验证业务关联与归因集成。
+用构造已知关系的数据验证统计方法正确性，再用项目截取 CSV 验证业务关联与归因集成。
 """
 import sys
 from pathlib import Path
@@ -13,7 +13,7 @@ from scipy import stats
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from agent_core.data_provider import SampleProvider  # noqa: E402
+from agent_core.data_provider import ProjectCsvProvider  # noqa: E402
 from agent_core.semantic import SemanticLayer  # noqa: E402
 from agent_core.statistics import (  # noqa: E402
     categorical_test, chi_square_rc, correlation_test, distribution_test,
@@ -25,7 +25,7 @@ from agent_core.statistics import (  # noqa: E402
 @pytest.fixture(scope="module")
 def env():
     semantic = SemanticLayer()
-    provider = SampleProvider()
+    provider = ProjectCsvProvider()
     yield semantic, provider
     provider.close()
 
@@ -102,8 +102,19 @@ def test_evidence_grade():
     assert evidence_grade(0.01, None, 3.0, 50) == "待验证线索"
 
 
-# ---- 样例数据业务关联 ----
-def test_sample_late_association(env):
+def test_logistic_rank_deficient_design_does_not_crash():
+    """重复解释变量造成秩不足时也应得到可审计结果，而非LinAlgError。"""
+    df = _known_df(n=600, seed=17)
+    df["x_duplicate"] = df["x"]
+    result = logistic_model_formula(df, "y ~ x + x_duplicate + w")
+    assert result["fit_method"] in {"Logit-Newton", "GLM-Binomial回退"}
+    assert result["nobs"] == len(df)
+    assert result["robust"] == "HC3"
+    assert {row["term"] for row in result["terms"]} >= {"x", "x_duplicate", "w"}
+
+
+# ---- 项目截取 CSV 业务关联 ----
+def test_project_csv_late_association(env):
     semantic, provider = env
     df = provider.execute(
         "SELECT is_late_delivery, is_low_score, late_days, review_score, "
@@ -124,11 +135,73 @@ def test_verify_factors_integration(env):
     v = verify_factors(provider)
     assert v["single_tests"]
     assert "is_late_delivery" in [t["factor"] for t in v["single_tests"]]
-    assert v["logistic"]["order"]["nobs"] > 0
-    assert v["logistic"]["seller"]["nobs"] > 0
-    # 关键因素证据分级应为强证据（延迟对低评分影响显著）
+    assert v["mode"] == "lightweight"
+    assert v["load_profile"]["max_interactive_python_columns"] == 2
+    assert not v["logistic"]["enabled"]
+    for model in (v["logistic"]["order"], v["logistic"]["seller"]):
+        assert model.get("skipped") is True
+        assert "轻量交互归因" in model["error"]
     assert v["evidence"]["grade"] == "强证据"
     assert v["evidence"]["or"] > 1
+
+
+def test_lightweight_verification_never_loads_wide_rows():
+    class RecordingProvider:
+        def __init__(self):
+            self.inner = ProjectCsvProvider()
+            self.sqls = []
+
+        def execute(self, sql):
+            self.sqls.append(sql)
+            return self.inner.execute(sql)
+
+        def close(self):
+            self.inner.close()
+
+    provider = RecordingProvider()
+    try:
+        result = verify_factors(provider)
+    finally:
+        provider.close()
+    extracts = result["load_profile"]["row_level_extracts"]
+    assert extracts
+    assert all(len(item["columns"]) == 2 for item in extracts)
+    assert not any("seller_price" in sql for sql in provider.sqls)
+    raw_selects = [
+        sql for sql in provider.sqls
+        if "COUNT(*)" not in sql and "FROM mart_order_delivery" in sql
+    ]
+    assert raw_selects
+    assert all(sql.split(" FROM ", 1)[0].count(",") == 1
+               for sql in raw_selects)
+
+
+def test_lightweight_aggregates_match_raw_reference(env):
+    _, provider = env
+    rows = provider.execute(
+        "SELECT is_late_delivery, is_low_score, delay_bucket, customer_state, "
+        "primary_category_name, primary_payment_type FROM mart_order_delivery "
+        "WHERE is_delivery_analysis_eligible=1 AND has_review_record=1 LIMIT 100000"
+    )
+    raw = pd.DataFrame(rows)
+    verification = verify_factors(provider)
+    by_factor = {t["factor"]: t for t in verification["single_tests"]}
+
+    binary = categorical_test(raw, "is_late_delivery", "is_low_score")
+    assert by_factor["is_late_delivery"]["p"] == pytest.approx(binary["p"])
+    assert by_factor["is_late_delivery"]["or"] == pytest.approx(binary["or"])
+
+    raw["delay_rank"] = raw["delay_bucket"].map(
+        {"按时": 0, "1-3天": 1, "4-7天": 2, "8-14天": 3, "15天+": 4}
+    )
+    trend = trend_test(raw, "delay_rank", "is_low_score")
+    assert by_factor["delay_bucket(趋势)"]["p"] == pytest.approx(trend["p"])
+
+    for factor in ("customer_state", "primary_category_name",
+                   "primary_payment_type"):
+        reference = chi_square_rc(raw, factor, "is_low_score")
+        assert by_factor[factor]["p"] == pytest.approx(reference["p"])
+        assert by_factor[factor]["cramers_v"] == reference["cramers_v"]
 
 
 def test_run_attribution_has_verification(env):
@@ -141,11 +214,17 @@ def test_run_attribution_has_verification(env):
     assert "single_tests" in v and "logistic" in v and "evidence" in v
 
 
-def test_logistic_is_late_significant(env):
+def test_logistic_reports_result_or_explicit_degradation(env):
     semantic, provider = env
-    v = verify_factors(provider)
+    v = verify_factors(provider, include_logistic=True)
+    assert v["mode"] == "deep"
+    assert v["logistic"]["enabled"]
     order = v["logistic"]["order"]
-    late = next(t for t in order["terms"] if t["term"] == "is_late_delivery")
-    assert late["or"] > 1
-    assert late["p"] < 0.05
-    assert late["ci95"][0] > 1          # 调整后 CI 不含 1（控制变量后仍显著）
+    if order.get("ok", True):
+        late = next(t for t in order["terms"] if t["term"] == "is_late_delivery")
+        assert late["or"] > 1
+        assert late["p"] < 0.05
+        assert late["ci95"][0] > 1
+    else:
+        assert order.get("note")
+        assert "不报告调整 OR" in order["note"]

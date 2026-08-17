@@ -1,7 +1,7 @@
 """M1 测试：工具层对账 + ReAct(Mock) 端到端 + 安全校验。
 
 核心是对账：工具层 query_mart 生成并执行 SQL 得到的结果，
-必须与手写 SQL 直接查询 SampleProvider 的期望值一致（保证"数字可对账"）。
+必须与手写 SQL 直接查询 ProjectCsvProvider 的期望值一致（保证"数字可对账"）。
 """
 import sys
 from pathlib import Path
@@ -12,7 +12,7 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from agent_core.data_provider import SampleProvider  # noqa: E402
+from agent_core.data_provider import ProjectCsvProvider  # noqa: E402
 from agent_core.llm import MockLLM  # noqa: E402
 from agent_core.loop import ReActLoop  # noqa: E402
 from agent_core.semantic import SemanticLayer  # noqa: E402
@@ -22,7 +22,7 @@ from agent_core.tools import Tools  # noqa: E402
 @pytest.fixture(scope="module")
 def env():
     semantic = SemanticLayer()
-    provider = SampleProvider()
+    provider = ProjectCsvProvider()
     tools = Tools(provider, semantic)
     yield semantic, provider, tools
     provider.close()
@@ -47,7 +47,8 @@ def test_1_overall_rates(env):
     )
     assert res["ok"]
     exp = q(provider, "SELECT AVG(is_late_delivery) AS d, AVG(is_low_score) AS l "
-                      "FROM mart_order_delivery WHERE is_delivery_analysis_eligible=1")
+                      "FROM mart_order_delivery WHERE is_delivery_analysis_eligible=1 "
+                      "AND has_review_record=1")
     assert approx_equal(res["rows"][0]["_m_late_rate"], exp["d"])
     assert approx_equal(res["rows"][0]["_m_low_score_rate"], exp["l"])
 
@@ -88,10 +89,11 @@ def test_3_delay_bucket(env):
     assert set(by) == set(exp)
     for k in exp:
         assert approx_equal(by[k], exp[k])
-    # 期望低评分率随延迟档位单调上升
+    # 截取样本不强求每个小档位严格单调，只验证严重延迟明显高于按时。
     order = ["按时", "1-3天", "4-7天", "8-14天", "15天+"]
     vals = [by[k] for k in order if k in by]
-    assert vals == sorted(vals)
+    assert len(vals) >= 2
+    assert max(vals[1:]) > vals[0]
 
 
 # ---- 4. Top-N 品类 / 州 ----
@@ -103,7 +105,7 @@ def test_4_top_n(env):
     exp = provider.execute(
         "SELECT primary_category_name, AVG(is_low_score) AS l FROM mart_order_delivery "
         "WHERE is_delivery_analysis_eligible=1 GROUP BY primary_category_name "
-        "ORDER BY l DESC LIMIT 5"
+        "ORDER BY l DESC, primary_category_name ASC LIMIT 5"
     )
     exp = [r["primary_category_name"] for r in exp]
     got = [r["primary_category_name"] for r in res["rows"]]
@@ -130,7 +132,7 @@ def test_seller_table(env):
     assert res["ok"]
     exp = provider.execute(
         "SELECT seller_state, AVG(is_low_score) AS l FROM mart_order_seller_delivery "
-        "GROUP BY seller_state ORDER BY l DESC LIMIT 5"
+        "GROUP BY seller_state ORDER BY l DESC, seller_state ASC LIMIT 5"
     )
     assert [r["seller_state"] for r in res["rows"]] == [r["seller_state"] for r in exp]
 
@@ -158,10 +160,84 @@ def test_order_by_must_be_in_query(env):
     assert "order_by" in res["error"]
 
 
+def test_order_by_accepts_direction_and_dimension(env):
+    _, _, tools = env
+    ranked = tools.query_mart(
+        "mart_order_delivery", metrics=["low_score_rate"],
+        dimensions=["customer_state"], order_by="low_score_rate DESC", limit=5,
+    )
+    timeline = tools.query_mart(
+        "mart_order_delivery", metrics=["low_score_rate"],
+        dimensions=["order_month"], order_by="order_month ASC",
+    )
+    assert ranked["ok"]
+    assert "ORDER BY _m_low_score_rate DESC" in ranked["sql"]
+    assert timeline["ok"]
+    assert "ORDER BY order_month ASC" in timeline["sql"]
+
+
+def test_order_by_accepts_multiple_whitelisted_fields(env):
+    _, _, tools = env
+    result = tools.query_mart(
+        "mart_order_seller_delivery",
+        metrics=["late_rate", "low_score_rate"], dimensions=["route"],
+        order_by="late_rate DESC, low_score_rate DESC", limit=10,
+    )
+    assert result["ok"]
+    assert (
+        "ORDER BY _m_late_rate DESC, _m_low_score_rate DESC" in result["sql"]
+    )
+
+
+def test_group_ranking_adds_deterministic_tie_breaker(env):
+    _, _, tools = env
+    result = tools.query_mart(
+        "mart_order_seller_delivery", metrics=["low_score_rate"],
+        dimensions=["route"], order_by="low_score_rate DESC", limit=5,
+    )
+    assert result["ok"]
+    assert "ORDER BY _m_low_score_rate DESC, route ASC" in result["sql"]
+
+
+def test_filter_missing_value_returns_tool_error(env):
+    _, _, tools = env
+    res = tools.query_mart(
+        "mart_order_delivery", metrics=["low_score_rate"],
+        filters={"customer_state": {"op": "="}},
+    )
+    assert not res["ok"]
+    assert "缺少 value" in res["error"]
+
+
+def test_filter_rejects_unknown_column_and_operator(env):
+    _, _, tools = env
+    bad_column = tools.query_mart(
+        "mart_order_delivery", metrics=["low_score_rate"],
+        filters={"not_a_column": "SP"},
+    )
+    bad_operator = tools.query_mart(
+        "mart_order_delivery", metrics=["low_score_rate"],
+        filters={"customer_state": {"op": "DROP", "value": "SP"}},
+    )
+    assert not bad_column["ok"]
+    assert "白名单" in bad_column["error"]
+    assert not bad_operator["ok"]
+    assert "操作符" in bad_operator["error"]
+
+
+def test_invalid_limit_returns_tool_error(env):
+    _, _, tools = env
+    res = tools.query_mart(
+        "mart_order_delivery", metrics=["low_score_rate"], limit="five"
+    )
+    assert not res["ok"]
+    assert "limit" in res["error"]
+
+
 # ---- ReAct(Mock) 端到端 ----
 def test_react_mock_end_to_end():
     semantic = SemanticLayer()
-    provider = SampleProvider()
+    provider = ProjectCsvProvider()
     llm = MockLLM(
         tool_call={
             "tool": "query_mart",

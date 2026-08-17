@@ -13,6 +13,15 @@ rules:
     monitor_metrics: ["延迟组低评分率", "客服联系成功率"]
     verify: "分批试点或 A/B 测试"
 
+  - id: delay_overall
+    condition: "延迟订单整体低评分风险显著上升，但样本不足以稳定区分延迟档位"
+    responsibility: 物流/客服
+    actions:
+      - "监控预计送达日临近订单并提前通知"
+      - "优先补齐全量数据后识别介入阈值"
+    monitor_metrics: ["延迟率", "延迟订单低评分率", "延迟天数P90"]
+    verify: "全量数据复核分档风险，再分线路试点"
+
   - id: delay_4d_plus
     condition: "延迟 4 天以上进入高风险区"
     responsibility: 客服/物流

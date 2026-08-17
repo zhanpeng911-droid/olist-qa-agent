@@ -1,128 +1,133 @@
-# M4 标准问题评测集（25 题）
-# 确定性评测（样例数据），不依赖 API key；run_eval.py 逐题执行。
-# 数字对账类：工具层结果与 SQL 直接重算一致（动态对账，不硬编码数字）。
+# 确定性核心评测（项目真实截取 CSV）
+# 目标：验证口径、路由、统计方法、归因结构、安全边界和失败兜底。
+# 注意：通过率只代表代码规则可复现，不代表大模型稳定；模型稳定性见 model_eval_questions.yml。
 
 eval_questions:
-  # ---------- L1 数字对账 ----------
-  - id: L1-01
-    category: L1 数字对账
-    question: 总体低评分率是多少？
-    check: metric_value
-    params: {table: mart_order_delivery, metric: low_score_rate, valid: true}
-  - id: L1-02
-    category: L1 数字对账
-    question: 总体延迟率是多少？
-    check: metric_value
-    params: {table: mart_order_delivery, metric: late_rate, valid: true}
-  - id: L1-03
-    category: L1 数字对账
-    question: 严格负面率是多少？
-    check: metric_value
-    params: {table: mart_order_delivery, metric: strict_negative_rate, valid: true}
-  - id: L1-04
-    category: L1 数字对账
-    question: 按时交付率是多少？
-    check: metric_value
-    params: {table: mart_order_delivery, metric: on_time_rate, valid: true}
-  - id: L1-05
-    category: L1 数字对账
-    question: 低评分率最高的 5 个品类？
-    check: top_n
-    params: {table: mart_order_delivery, metric: low_score_rate, dimension: primary_category_name, n: 5, valid: true}
-  - id: L1-06
-    category: L1 数字对账
-    question: 低评分率最高的 5 个客户州？
-    check: top_n
-    params: {table: mart_order_delivery, metric: low_score_rate, dimension: customer_state, n: 5, valid: true}
-  - id: L1-07
-    category: L1 数字对账
-    question: 支付审批和总履约时长？
-    check: metric_multi
-    params: {table: mart_order_delivery, metrics: [avg_approval_days, avg_fulfillment_days], valid: true}
-  - id: L1-08
-    category: L1 数字对账
-    question: 各月份低评分率趋势？
-    check: metric_group
-    params: {table: mart_order_delivery, metric: low_score_rate, dimension: order_month, valid: true}
+  # ---------- A. 指标与分组动态对账（27） ----------
+  - {id: Q-01, category: 指标对账, question: 总体低评分率是多少？, check: metric_value, params: {table: mart_order_delivery, metric: low_score_rate}}
+  - {id: Q-02, category: 指标对账, question: 总体延迟率是多少？, check: metric_value, params: {table: mart_order_delivery, metric: late_rate}}
+  - {id: Q-03, category: 指标对账, question: 严格负面率是多少？, check: metric_value, params: {table: mart_order_delivery, metric: strict_negative_rate}}
+  - {id: Q-04, category: 指标对账, question: 按时交付率是多少？, check: metric_value, params: {table: mart_order_delivery, metric: on_time_rate}}
+  - {id: Q-05, category: 指标对账, question: 有效订单量是多少？, check: metric_value, params: {table: mart_order_delivery, metric: order_count}}
+  - {id: Q-06, category: 指标对账, question: 有评价订单数是多少？, check: metric_value, params: {table: mart_order_delivery, metric: reviewed_orders}}
+  - {id: Q-07, category: 指标对账, question: 平均延迟天数是多少？, check: metric_value, params: {table: mart_order_delivery, metric: avg_late_days}}
+  - {id: Q-08, category: 指标对账, question: 平均评价分数是多少？, check: metric_value, params: {table: mart_order_delivery, metric: avg_review_score}}
+  - {id: Q-09, category: 指标对账, question: 商品成交金额是多少？, check: metric_value, params: {table: mart_order_delivery, metric: gmv}}
+  - {id: Q-10, category: 指标对账, question: 运费总额是多少？, check: metric_value, params: {table: mart_order_delivery, metric: freight_total}}
+  - {id: Q-11, category: 指标对账, question: 支付总金额是多少？, check: metric_value, params: {table: mart_order_delivery, metric: payment_total}}
+  - {id: Q-12, category: 指标对账, question: 平均支付审批时长是多少？, check: metric_value, params: {table: mart_order_delivery, metric: avg_approval_days}}
+  - {id: Q-13, category: 指标对账, question: 平均总履约时长是多少？, check: metric_value, params: {table: mart_order_delivery, metric: avg_fulfillment_days}}
+  - {id: Q-14, category: 多指标, question: 同时给出延迟率、低评分率和平均评分, check: metric_multi, params: {table: mart_order_delivery, metrics: [late_rate, low_score_rate, avg_review_score]}}
+  - {id: Q-15, category: 多指标, question: 同时给出GMV、运费和支付额, check: metric_multi, params: {table: mart_order_delivery, metrics: [gmv, freight_total, payment_total]}}
+  - {id: Q-16, category: 分组对账, question: 各月低评分率, check: metric_group, params: {table: mart_order_delivery, metric: low_score_rate, dimension: order_month}}
+  - {id: Q-17, category: 分组对账, question: 各客户州低评分率, check: metric_group, params: {table: mart_order_delivery, metric: low_score_rate, dimension: customer_state}}
+  - {id: Q-18, category: 分组对账, question: 各品类低评分率, check: metric_group, params: {table: mart_order_delivery, metric: low_score_rate, dimension: primary_category_name}}
+  - {id: Q-19, category: 分组对账, question: 各支付方式低评分率, check: metric_group, params: {table: mart_order_delivery, metric: low_score_rate, dimension: primary_payment_type}}
+  - {id: Q-20, category: 分组对账, question: 各延迟档低评分率, check: metric_group, params: {table: mart_order_delivery, metric: low_score_rate, dimension: delay_bucket}}
+  - {id: Q-21, category: 分组对账, question: 延迟和非延迟订单平均评分, check: metric_group, params: {table: mart_order_delivery, metric: avg_review_score, dimension: is_late_delivery}}
+  - {id: Q-22, category: 分组对账, question: 各卖家州低评分率, check: metric_group, params: {table: mart_order_seller_delivery, metric: low_score_rate, dimension: seller_state}}
+  - {id: Q-23, category: 分组对账, question: 各线路延迟率, check: metric_group, params: {table: mart_order_seller_delivery, metric: late_rate, dimension: route}}
+  - {id: Q-24, category: 排名, question: 低评分率最高的5个品类, check: top_n, params: {table: mart_order_delivery, metric: low_score_rate, dimension: primary_category_name, n: 5}}
+  - {id: Q-25, category: 排名, question: 延迟率最高的5个客户州, check: top_n, params: {table: mart_order_delivery, metric: late_rate, dimension: customer_state, n: 5}}
+  - {id: Q-26, category: 排名, question: 低评分率最高的5条线路, check: top_n, params: {table: mart_order_seller_delivery, metric: low_score_rate, dimension: route, n: 5}}
+  - {id: Q-27, category: 排名, question: 低评分率最高的5个卖家州, check: top_n, params: {table: mart_order_seller_delivery, metric: low_score_rate, dimension: seller_state, n: 5}}
+  - {id: QP-01, category: 确定性取数, question: 复合总体问题无需API且保留全部指标, check: query_plan, params: {question: 总体订单量、低评分率、延迟率和平均评分是多少？, table: mart_order_delivery, metrics: [order_count, low_score_rate, late_rate, avg_review_score], dimensions: []}}
+  - {id: QP-02, category: 确定性取数, question: 按月复合指标无需API, check: query_plan, params: {question: 按月查看订单量、低评分率和延迟率。, table: mart_order_delivery, metrics: [order_count, low_score_rate, late_rate], dimensions: [order_month]}}
+  - {id: QP-03, category: 确定性取数, question: 线路Top10识别表指标维度和数量, check: query_plan, params: {question: 低评分率最高的10条线路是什么？同时给出订单量。, table: mart_order_seller_delivery, metrics: [record_count, low_score_rate], dimensions: [route], limit: 10}}
+  - {id: QP-04, category: 确定性取数, question: 品类支付双维度均被保留, check: query_plan, params: {question: 按品类和支付方式交叉查看低评分率。, table: mart_order_delivery, metrics: [low_score_rate], dimensions: [primary_category_name, primary_payment_type]}}
+  - {id: QP-05, category: 确定性取数, question: 复合总体问题可直接执行并返回SQL, check: query_execute, params: {question: 总体订单量、低评分率、延迟率和平均评分是多少？}}
 
-  # ---------- L2 归因结构 ----------
-  - id: L2-01
-    category: L2 归因结构
-    question: 归因输出结构完整（baseline/factors/priorities/routes/verification/recommendations）
-    check: attribution_structure
-  - id: L2-02
-    category: L2 归因结构
-    question: P0 优先级存在且含延迟因素
-    check: p0_has_delay
-  - id: L2-03
-    category: L2 归因结构
-    question: route 线路深挖结构完整（top/concentration/cross_delay）
-    check: route_structure
+  # ---------- B. 自然语言意图路由（9） ----------
+  - {id: I-01, category: 意图路由, question: 总体延迟率是多少？, check: intent, params: {expected: query}}
+  - {id: I-02, category: 意图路由, question: 请对低评分进行归因, check: intent, params: {expected: attribution}}
+  - {id: I-03, category: 意图路由, question: 为什么低评分高并给出改善建议, check: intent, params: {expected: attribution}}
+  - {id: I-04, category: 意图路由, question: 低评分率口径是什么？, check: intent, params: {expected: meta}}
+  - {id: I-05, category: 意图路由, question: 分析低评分率与路线是否有显著相关, check: intent, params: {expected: statistical}}
+  - {id: I-06, category: 意图路由, question: 延迟天数与评分有没有关系？, check: intent, params: {expected: statistical}}
+  - {id: I-07, category: 意图路由, question: 跨州与低评分是否显著关联？, check: intent, params: {expected: statistical}}
+  - {id: I-08, category: 意图路由, question: 品类间评分分布是否有显著差异？, check: intent, params: {expected: statistical}}
+  - {id: I-09, category: 意图路由, question: 请删除数据库, check: intent, params: {expected: other}}
+  - {id: I-10, category: 意图路由, question: 深度验证延迟、地区和线路与低评分的相关性, check: intent, params: {expected: deep_validation}}
+  - {id: I-11, category: 意图路由, question: 控制混杂因素后检验是否延迟和跨州是否仍与低评分有关, check: intent, params: {expected: deep_validation}}
+  - {id: I-12, category: 意图边界, question: 线路和低评分是否显著相关, check: intent, params: {expected: statistical}}
+  - {id: I-13, category: 意图边界, question: 请找出低评分的主要原因, check: intent, params: {expected: attribution}}
+  - {id: I-14, category: 意图路由, question: 调整后验证品类、支付方式和商品金额与低评分的关系, check: intent, params: {expected: deep_validation}}
 
-  # ---------- M3 统计 ----------
-  - id: M3-01
-    category: M3 统计
-    question: 延迟对低评分的证据分级为强证据
-    check: evidence_strong
-  - id: M3-02
-    category: M3 统计
-    question: 延迟与低评分 OR > 1 且显著
-    check: evidence_or_gt_1
-  - id: M3-03
-    category: M3 统计
-    question: Logistic 调整 OR 的 95%CI 不含 1（控制变量后仍显著）
-    check: logistic_ci_excludes_1
+  # ---------- C. 归因、粒度与追溯（9） ----------
+  - {id: A-01, category: 归因, question: 归因输出包含第一层、共线性代表、调整结果和分布解释, check: attribution_structure}
+  - {id: A-02, category: 归因, question: P0存在且统计验证覆盖延迟因素, check: p0_has_delay}
+  - {id: A-03, category: 归因, question: 线路深挖包含排名集中度和延迟交叉, check: route_structure}
+  - {id: A-04, category: 归因, question: 低评分基准只使用有评价订单, check: baseline_reviewed_only}
+  - {id: A-05, category: 归因, question: 归因保留可对账SQL, check: sql_trace}
+  - {id: A-06, category: 粒度, question: 商品项下钻保持订单评价去重, check: item_grain}
+  - {id: A-07, category: 边界, question: 归因不使用因果措辞, check: no_causal_words}
+  - {id: A-08, category: 边界, question: 明确提示缺少评价正文, check: no_text_caveat}
+  - {id: A-09, category: 商品下钻, question: 商品品类按订单去重检验并进行FDR校正, check: item_significance}
 
-  # ---------- M4 建议 ----------
-  - id: M4-01
-    category: M4 建议
-    question: 每条建议含责任方/动作/监控指标/验证方式
-    check: rec_fields
-  - id: M4-02
-    category: M4 建议
-    question: 存在延迟相关的改善建议
-    check: rec_has_delay
-  - id: M4-03
-    category: M4 建议
-    question: 品类不显著 → 不凭空给出品类建议
-    check: rec_no_unverified
-  - id: M4-04
-    category: M4 建议
-    question: 每条建议对应已验证证据（evidence_grade 非空）
-    check: rec_has_evidence
+  # ---------- D. 统计方法选择与执行（29） ----------
+  - {id: S-01, category: 方法选择, question: 线路与低评分是否显著相关？, check: stat_plan, params: {factor: route, method: pearson_chi_square}}
+  - {id: S-02, category: 方法选择, question: 是否跨州与低评分有关吗？, check: stat_plan, params: {factor: cross_state, method: binary_association}}
+  - {id: S-03, category: 方法选择, question: 延迟程度越高低评分率是否上升？, check: stat_plan, params: {factor: delay_bucket, method: cochran_armitage_trend}}
+  - {id: S-04, category: 方法选择, question: 延迟天数与评分是否相关？, check: stat_plan, params: {factor: late_days, method: spearman}}
+  - {id: S-05, category: 方法选择, question: 运费在低评分与非低评分订单间是否有显著差异？, check: stat_plan, params: {factor: freight_total, method: mann_whitney_u}}
+  - {id: S-06, category: 方法选择, question: 不同品类的评价分数分布是否不同？, check: stat_plan, params: {factor: primary_category_name, method: kruskal_wallis}}
+  - {id: S-07, category: 方法选择, question: 客户州与低评分率是否显著关联？, check: stat_plan, params: {factor: customer_state, method: pearson_chi_square}}
+  - {id: S-08, category: 方法选择, question: 卖家州与低评分率是否显著关联？, check: stat_plan, params: {factor: seller_state, method: pearson_chi_square}}
+  - {id: S-09, category: 方法选择, question: 支付方式和低评分率有关系吗？, check: stat_plan, params: {factor: primary_payment_type, method: pearson_chi_square}}
+  - {id: S-10, category: 方法选择, question: 总履约时长与评分是否相关？, check: stat_plan, params: {factor: fulfillment_days, method: spearman}}
+  - {id: S-11, category: 统计执行, question: 分析低评分率与路线是否有显著相关, check: stat_execute}
+  - {id: S-12, category: 统计执行, question: 跨州与低评分是否显著关联？, check: stat_execute}
+  - {id: S-13, category: 统计执行, question: 延迟档位越高低评分率是否显著上升？, check: stat_execute}
+  - {id: S-14, category: 统计执行, question: 延迟天数和评分是否显著相关？, check: stat_execute}
+  - {id: S-15, category: 统计执行, question: 运费在低评分和非低评分订单间有显著差异吗？, check: stat_execute}
+  - {id: S-16, category: 统计执行, question: 不同品类评价分数是否有显著差异？, check: stat_execute}
+  - {id: S-17, category: 统计边界, question: 低评分率与天气是否显著相关？, check: stat_unknown}
+  - {id: S-18, category: 统计说明, question: 延迟在低评分归因中使用了什么检验方法以及p值？, check: stat_method_p_answer}
+  - {id: S-19, category: 通用双变量, question: 配送时长是否与路线有显著相关？, check: stat_plan, params: {factor: fulfillment_days, method: kruskal_wallis}}
+  - {id: S-20, category: 通用双变量, question: 商品金额与运费是否相关？, check: stat_plan, params: {factor: price_total, method: spearman}}
+  - {id: S-21, category: 通用双变量, question: 是否跨州与配送时长有显著差异？, check: stat_plan, params: {factor: cross_state, method: mann_whitney_u}}
+  - {id: S-22, category: 通用双变量, question: 品类与支付方式是否有关联？, check: stat_plan, params: {factor: primary_category_name, method: pearson_chi_square}}
+  - {id: S-23, category: 商品项双变量, question: 商品项金额与商品重量是否相关？, check: stat_plan, params: {factor: item_price, method: spearman}}
+  - {id: S-24, category: 通用双变量执行, question: 配送时长是否与路线有显著相关？, check: stat_execute}
+  - {id: S-25, category: 通用双变量执行, question: 商品金额与运费是否相关？, check: stat_execute}
+  - {id: S-26, category: 通用双变量执行, question: 是否跨州与配送时长有显著差异？, check: stat_execute}
+  - {id: S-27, category: 通用双变量执行, question: 品类与支付方式是否有关联？, check: stat_execute}
+  - {id: S-28, category: 商品项双变量执行, question: 商品项金额与商品重量是否相关？, check: stat_execute}
+  - {id: S-29, category: 分析粒度边界, question: 支付方式与配送线路是否有关联？, check: stat_unknown}
 
-  # ---------- 安全 ----------
-  - id: SEC-01
-    category: 安全
-    question: 禁止 DML（INSERT/UPDATE/DELETE/DROP）
-    check: sec_no_dml
-  - id: SEC-02
-    category: 安全
-    question: 工具生成 SQL 不产生 JOIN
-    check: sec_no_join
-  - id: SEC-03
-    category: 安全
-    question: 未知指标被拒绝
-    check: sec_unknown_metric
-  - id: SEC-04
-    category: 安全
-    question: 白名单外表被拒绝
-    check: sec_unknown_table
-  - id: SEC-05
-    category: 安全
-    question: 行数限制封顶（LIMIT 不超 max_rows）
-    check: sec_limit
+  # ---------- E. 统计模型与建议门槛（7） ----------
+  - {id: V-01, category: 统计证据, question: 延迟通过第一层FDR与置信区间门槛, check: evidence_strong}
+  - {id: V-02, category: 统计证据, question: 延迟低评分OR大于1且显著, check: evidence_or_gt_1}
+  - {id: V-03, category: 负载控制, question: 自动Logistic使用HC3且只读取必要字段, check: logistic_safe}
+  - {id: R-01, category: 输出边界, question: 自动归因不输出治理策略, check: light_no_strategy}
+  - {id: R-02, category: 自动调整, question: 第一层候选按共线性规则选代表进入模型, check: validation_candidates}
+  - {id: R-03, category: 结果表意, question: 明确总结第一层显著特征, check: significant_summary}
+  - {id: R-04, category: 结果表意, question: 每项成功检验包含方法、p值、FDR校正p值和95%CI, check: feature_test_details}
+  - {id: R-05, category: 目标边界, question: 归因只支持低评分目标, check: attribution_only_low_score}
+  - {id: R-06, category: 共线性, question: 每个共线性组只保留预设直观代表, check: collinear_representative}
+  - {id: R-07, category: 调整门槛, question: 调整后稳定同时要求FDR显著和95%CI有效, check: adjusted_threshold}
+  - {id: R-08, category: 解释输出, question: 只为调整后稳定变量生成分布下钻, check: stable_explanations}
+  - {id: DV-01, category: 深度验证, question: 深度问题覆盖用户点名的全部变量, check: deep_all_features}
+  - {id: DV-02, category: 深度验证, question: 深度问题运行多变量调整而非重复单变量检验, check: deep_adjusted_models}
+  - {id: DV-03, category: 深度验证, question: 高风险线路使用时间留出验证, check: deep_route_holdout}
+  - {id: DV-04, category: 负载控制, question: 深度模型分表读取必要字段且查询有上限, check: deep_bounded_load}
+  - {id: DV-05, category: 深度变量, question: 未点名变量的深度问题使用标准默认变量集, check: deep_default_features, params: {question: 请对低评分进行深度验证}}
+  - {id: DV-06, category: 深度变量, question: 深度问题只提取用户指定子集, check: deep_subset_features, params: {question: 深度验证品类、支付方式和商品金额与低评分的关联, expected_features: [primary_category_name, primary_payment_type, price_total]}}
+  - {id: DV-07, category: 深度结果, question: 调整结果包含校正p值且直接效应包含OR与95%CI, check: deep_reports_inference}
+  - {id: DV-08, category: 建议门槛, question: 深度验证结果本身不自动生成治理动作, check: deep_no_strategy}
 
-  # ---------- 边界 ----------
-  - id: B-01
-    category: 边界
-    question: 归因/建议输出无因果措辞（导致/造成）
-    check: no_causal_words
-  - id: B-02
-    category: 边界
-    question: 明确提示不含评价正文（不臆测文本原因）
-    check: no_text_caveat
-  - id: B-03
-    category: 边界
-    question: 小样本过滤生效（min_group_sample）
-    check: min_sample_filter
+  # ---------- F. 安全、数据与失败兜底（13） ----------
+  - {id: G-01, category: 安全, question: 工具SQL禁止DML, check: sec_no_dml}
+  - {id: G-02, category: 安全, question: 工具SQL不允许自由JOIN, check: sec_no_join}
+  - {id: G-03, category: 安全, question: 未知指标被拒绝, check: sec_unknown_metric}
+  - {id: G-04, category: 安全, question: 白名单外表被拒绝, check: sec_unknown_table}
+  - {id: G-05, category: 安全, question: 未知维度被拒绝, check: sec_unknown_dimension}
+  - {id: G-06, category: 安全, question: 非查询指标不能用于排序, check: sec_bad_order_by}
+  - {id: G-07, category: 安全, question: LIMIT被强制封顶, check: sec_limit}
+  - {id: D-01, category: 数据, question: 三张项目Mart截取CSV存在且非空, check: project_csv_integrity}
+  - {id: D-02, category: 数据, question: 商品项分析视图由项目表生成, check: item_view_exists}
+  - {id: D-03, category: 数据, question: 优先级对象满足最小样本限制, check: min_sample_filter}
+  - {id: F-01, category: 协议容错, question: 支持代码围栏和前缀JSON, check: json_parser}
+  - {id: F-02, category: 失败兜底, question: 达到步数上限不能返回空答案, check: nonblank_fallback}
+  - {id: F-03, category: 性能, question: 路线显著性走聚合查询且限定时间, check: stat_execute, params: {question: 分析低评分率与路线是否有显著相关, max_seconds: 5}}
+  - {id: F-04, category: 失败兜底, question: API超时返回明确错误而不是程序崩溃, check: llm_error_fallback}

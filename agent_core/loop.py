@@ -10,6 +10,7 @@ LLM 输出协议（JSON）：
 from __future__ import annotations
 
 import json
+import re
 
 from .attribution import run_attribution
 from .data_provider import DataProvider
@@ -21,28 +22,73 @@ MAX_STEPS = 5
 MAX_OBS_CHARS = 1500          # 工具结果回喂时截断，控制上下文
 
 
+def parse_decision(reply: str) -> dict:
+    """容忍 Markdown 代码围栏或 JSON 前后有少量说明文字。"""
+    text = (reply or "").strip()
+    if not text:
+        raise json.JSONDecodeError("empty response", text, 0)
+    fenced = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text,
+                       flags=re.IGNORECASE | re.DOTALL)
+    if fenced:
+        text = fenced.group(1)
+    try:
+        value = json.loads(text)
+    except json.JSONDecodeError:
+        start, end = text.find("{"), text.rfind("}")
+        if start < 0 or end <= start:
+            raise
+        value = json.loads(text[start:end + 1])
+    if not isinstance(value, dict):
+        raise json.JSONDecodeError("decision must be an object", text, 0)
+    return value
+
+
 def _fmt_observation(result: dict) -> str:
     """把工具返回 dict 压成可回喂的文本（含 SQL 便于对账）。"""
     if not result.get("ok"):
         return f"[工具错误] {result.get('error', '未知错误')}"
 
-    # 归因流程结果：输出基准 + 优先级摘要
+    # 关联因素分析结果：输出基准 + 优先级摘要
     if "priorities" in result:
         base = result["baseline"]
         lines = [
-            "【低评分归因结果】",
+            "【低评分关联因素分析】",
             f"订单级基准: 样本 {base['order']['sample']}，低评分率 "
             f"{base['order']['low_score_rate']:.2%}",
             f"卖家级基准(单卖家): 样本 {base['seller']['sample']}，低评分率 "
             f"{base['seller']['low_score_rate']:.2%}",
-            "优先级(P0/P1/P2) Top:",
+            "描述性问题对象（P0/P1/P2，P0为最高排查优先级）:",
         ]
         for g in result["priorities"][:8]:
             lines.append(
                 f"  {g['priority']} [{g['dimension']}={g['value']}] "
                 f"样本{g['sample']} 率{g['low_score_rate']:.2%} "
-                f"Lift{g['lift']:.2f} 超额{g['excess_low_score']:.0f}"
+                f"相对总体倍数{g['lift']:.2f} "
+                f"高于总体水平的预计低评分数{g['excess_low_score']:.0f}"
             )
+        lines.append("统计显著特征:")
+        for test in result.get("significant_features", [])[:6]:
+            lines.append(
+                f"  {test['label']}: {test['method']} "
+                f"p={test['p_used']:.3g} ({test['p_basis']})"
+            )
+        item_sig = (
+            result.get("item_drilldown", {}).get("significance", {})
+            .get("category", {}).get("significant_risk", [])
+        )
+        if item_sig:
+            lines.append("商品品类显著对象:")
+            for row in item_sig[:5]:
+                lines.append(
+                    f"  {row['value']}: 优势比（OR）={row['or']:.3g} "
+                    f"FDR-p={row['p_adjusted']:.3g}"
+                )
+        lines.append("后续多变量验证:")
+        for item in result.get("deep_validation_plan", [])[:4]:
+            lines.append(
+                f"  {item['label']}: {item['recommended_method']}"
+            )
+        lines.append("结论边界: 结果仅表示统计关联，不作因果判断或自动生成治理策略。")
         lines.append("注: " + " ".join(result.get("caveats", [])))
         return "\n".join(lines)
 
@@ -81,7 +127,7 @@ class ReActLoop:
         }
 
     def _run_attribution(self) -> dict:
-        """执行低评分描述性归因（固定顺序流程，无需参数）。"""
+        """执行低评分关联因素分析（固定顺序流程，无需参数）。"""
         return run_attribution(self._provider, self._semantic)
 
     def _system_prompt(self) -> str:
@@ -91,9 +137,23 @@ class ReActLoop:
             + self._semantic.describe_all()
             + "\n\n可调用工具（输出 JSON）:\n"
             "  {\"action\":\"tool\",\"tool\":\"query_mart\",\"args\":{\"table\":\"...\",\"metrics\":[...],\"dimensions\":[...],\"filters\":{...},\"order_by\":\"...\",\"limit\":N}}\n"
+            "query_mart 的 filters 只能使用该表已列出的维度，格式只能是 {\"列\": 值} 或 "
+            "{\"列\": {\"op\": \"=|!=|>|>=|<|<=|IN|NOT IN\", \"value\": 值}}；"
+            "不要省略 value。无筛选时省略 filters。\n"
+            "order_by 可写本次指标或维度名，并可追加 ASC/DESC；多字段用逗号分隔，例如 "
+            "late_rate DESC, low_score_rate DESC。\n"
             "  {\"action\":\"tool\",\"tool\":\"top_n\",\"args\":{\"table\":\"...\",\"metric\":\"...\",\"dimension\":\"...\",\"n\":N}}\n"
+            "表选择规则：普通品类汇总使用 mart_order_delivery.primary_category_name；只有明确要求商品项、SKU、"
+            "具体商品或商品项运费时才使用 mart_order_item_analysis。卖家州、线路、跨州/同州使用 "
+            "mart_order_seller_delivery；线路必须优先直接使用 route 维度，不要拆成 seller_state 与 customer_state。"
+            "排名问题优先直接调用 top_n。\n"
+            "只查询回答问题所必需的最少指标与维度，不要自行追加无关指标。\n"
+            "一次成功工具结果已经包含用户要求的指标和维度时，下一步必须输出 answer；"
+            "不要为了改换排序、补取全部分组或重复核对而再次执行等价查询。\n"
             "  {\"action\":\"tool\",\"tool\":\"run_attribution\",\"args\":{}}\n"
-            "当用户要求对低评分做归因/找原因/优先治理时，调用 run_attribution（无需参数，自动完成订单级+卖家级扫描与优先级排序）。\n"
+            "当用户要求分析低评分关联因素或进行低评分归因时，调用 run_attribution（无需参数，自动完成订单级与订单-卖家级分析）。\n"
+            "run_attribution 会完成单变量筛选、共线性处理和多变量Logistic调整；"
+            "必须区分统计关联与因果关系，不得自动生成治理策略。\n"
             "  {\"action\":\"tool\",\"tool\":\"list_metrics\",\"args\":{\"table\":\"...\"}}\n"
             "当已获得足够数据时，输出最终答案："
             "{\"action\":\"answer\",\"content\":\"你的结论，引用数字并注明来源 SQL 以保证可对账\"}\n"
@@ -110,9 +170,19 @@ class ReActLoop:
 
         while steps < self._max_steps:
             steps += 1
-            reply = self._llm.chat(messages)
             try:
-                decision = json.loads(reply)
+                reply = self._llm.chat(messages)
+            except Exception as exc:
+                error = (
+                    f"模型调用失败（{type(exc).__name__}）。请检查网络/API 配置后重试；"
+                    "本次没有执行未确认的数据操作。"
+                )
+                trace.append({"step": steps, "event": "llm_error",
+                              "error_type": type(exc).__name__})
+                return {"answer": error, "trace": trace, "steps": steps,
+                        "ok": False, "error": error}
+            try:
+                decision = parse_decision(reply)
             except json.JSONDecodeError:
                 # 反思：格式错误，要求重试
                 messages.append(
@@ -124,8 +194,15 @@ class ReActLoop:
 
             if decision.get("action") == "answer":
                 trace.append({"step": steps, "event": "answer", "reply": reply})
-                return {"answer": decision.get("content", ""), "trace": trace,
-                        "steps": steps, "ok": True}
+                content = str(decision.get("content") or "").strip()
+                if content:
+                    return {"answer": content, "trace": trace,
+                            "steps": steps, "ok": True}
+                messages.append(
+                    {"role": "user", "content": "答案内容为空。请根据已有工具结果给出非空结论。"}
+                )
+                trace.append({"step": steps, "event": "empty_answer"})
+                continue
 
             if decision.get("action") == "tool":
                 tool = decision.get("tool")
@@ -139,14 +216,31 @@ class ReActLoop:
                     trace.append({"step": steps, "event": "unknown_tool", "tool": tool})
                     continue
                 try:
+                    if not isinstance(args, dict):
+                        raise TypeError("args 必须是 JSON 对象")
                     result = fn(**args)
-                except TypeError as e:
-                    result = {"ok": False, "error": f"参数错误: {e}"}
+                except TypeError as exc:
+                    result = {"ok": False, "error": f"参数错误: {exc}"}
+                except Exception as exc:
+                    # 模型参数不能让整次问答或批量评测进程崩溃；错误会回喂给模型反思。
+                    result = {
+                        "ok": False,
+                        "error": f"工具执行失败（{type(exc).__name__}）: {exc}",
+                    }
                 obs = _fmt_observation(result)
                 messages.append({"role": "assistant", "content": reply})
-                messages.append({"role": "user", "content": f"[工具 {tool} 结果]\n{obs}"})
+                next_step = (
+                    "\n[下一步约束] 若结果已包含问题要求的指标和维度，请立即输出 answer；"
+                    "不要重复或改写等价查询。"
+                    if result.get("ok") else ""
+                )
+                messages.append({
+                    "role": "user",
+                    "content": f"[工具 {tool} 结果]\n{obs}{next_step}",
+                })
                 trace.append({"step": steps, "event": "tool", "tool": tool,
-                              "args": args, "ok": result.get("ok", False)})
+                              "args": args, "ok": result.get("ok", False),
+                              "error": result.get("error")})
                 continue
 
             messages.append(
@@ -154,5 +248,6 @@ class ReActLoop:
             )
             trace.append({"step": steps, "event": "bad_action", "reply": reply})
 
-        return {"answer": "", "trace": trace, "steps": steps,
-                "ok": False, "error": "达到最大步数仍未给出答案"}
+        error = "达到最大步数仍未给出有效答案；请缩小问题范围或重试。"
+        return {"answer": error, "trace": trace, "steps": steps,
+                "ok": False, "error": error}

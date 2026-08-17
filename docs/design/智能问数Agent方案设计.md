@@ -302,25 +302,27 @@ guards:
 ```text
 olist-qa-agent/
 ├─ pyproject.toml / run.py / README.md / .env(.example)
+├─ data/sample/                    # 三张 Mart 截取演示样本
+├─ artifacts/                      # 评测结果与运行日志
 ├─ config/
-│  └─ recommendation_rules.yml   # 建议规则库
+│  └─ recommendation_rules.yml   # 历史规则；当前流程不调用
 ├─ semantics/
 │  └─ metrics_dict.yaml          # 语义字典（唯一真相源）
-├─ sample_data/                  # 样例数据
-├─ scripts/
-│  └─ generate_sample_data.py
+├─ scripts/                       # 启动辅助脚本
 ├─ agent_core/
 │  ├─ semantic.py / data_provider.py / llm.py / intent.py / loop.py
-│  └─ tools/
-│     ├─ query_tools.py          # L1 查询（当前 tools.py 演进）
-│     ├─ statistics_tools.py     # M3 统计检验
-│     ├─ attribution_tools.py    # M2 归因扫描/贡献拆解
-│     └─ recommendation_tools.py # M4 建议规则映射
+│  ├─ tools.py / query_analysis.py
+│  ├─ bivariate_analysis.py / statistical_analysis.py
+│  └─ low_score_attribution.py / deep_validation.py
 ├─ docs/
-│  ├─ 智能问数Agent方案设计.md
-│  └─ 并入变更清单_朋友思路.md
+│  ├─ design/                    # 方案与变更设计
+│  └─ guides/                    # 部署、协作与故障分析
+├─ ui/
+│  └─ app.py                     # Streamlit 页面
 └─ tests/
-   ├─ benchmark_questions.md / test_m1.py / TEST_LOG.md
+   ├─ eval_questions.yml / model_eval_questions.yml
+   ├─ run_eval.py / run_model_eval.py
+   └─ test_*.py / TEST_LOG.md
 ```
 
 ---

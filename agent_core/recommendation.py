@@ -16,6 +16,7 @@ _RULES_PATH = Path(__file__).resolve().parent.parent / "config" / "recommendatio
 
 # 规则 id -> 触发依据（基于归因/验证输出的判定）
 _RULE_MATCH = {
+    "delay_overall": "is_late_delivery",
     "delay_1_3d": "delay_bucket=1-3天",      # 延迟 1-3 天风险上升
     "delay_4d_plus": "delay_bucket=4-7天",   # 延迟 4 天以上进入高风险
     "route_high_risk": "route",              # 高规模高风险线路
@@ -57,33 +58,71 @@ def recommend_actions(provider: DataProvider, semantic: SemanticLayer,
         return {"ok": False, "error": "缺少统计验证结果，无法生成建议",
                 "recommendations": []}
 
+    # 策略门槛：轻量单因素显著只能生成“待深度验证”任务，不能直接转成治理动作。
+    logistic = verification.get("logistic", {})
+    order_model = logistic.get("order", {})
+    if (res.get("analysis_mode") != "deep"
+            or logistic.get("enabled") is not True
+            or order_model.get("ok") is not True):
+        return {
+            "ok": True,
+            "status": "withheld_pending_deep_validation",
+            "recommendations": [],
+            "pending_verification": res.get("deep_validation_plan", []),
+            "note": "尚未通过深度多变量验证，暂不生成治理策略。",
+        }
+
     rules = _load_rules()
     priorities = res.get("priorities", [])
     grade = _evidence_grade(verification)
     late_ev = verification.get("evidence", {})
+    order_terms = order_model.get("terms", [])
+
+    def _term_significant(term: dict) -> bool:
+        ci = term.get("ci95") or []
+        return bool(
+            term.get("p", 1) < 0.05
+            and len(ci) == 2
+            and not (ci[0] <= 1 <= ci[1])
+        )
+
+    late_adjusted = next(
+        (term for term in order_terms
+         if term.get("term") == "is_late_delivery" and _term_significant(term)),
+        None,
+    )
 
     recommendations: list[dict] = []
     matched_ids: set[str] = set()
 
     # 1. 延迟相关（is_late_delivery 有证据时）
-    if grade in ("强证据", "中等证据") and late_ev.get("or", 1) > 1:
+    if (grade in ("强证据", "中等证据")
+            and late_ev.get("or", 1) > 1
+            and late_adjusted
+            and late_adjusted.get("or", 1) > 1):
         if _has_factor(priorities, "delay_bucket", "15天+"):
             matched_ids.add("delay_4d_plus")
         if _has_factor(priorities, "delay_bucket", "1-3天"):
             matched_ids.add("delay_1_3d")
         if not matched_ids and _has_factor(priorities, "delay_bucket", "4-7天"):
             matched_ids.add("delay_4d_plus")
+        if not ({"delay_1_3d", "delay_4d_plus"} & matched_ids):
+            matched_ids.add("delay_overall")
 
-    # 2. 线路风险（route P0/P1）
+    # 2. 线路风险仍只完成描述性定位；当前深度模型没有 route 项，禁止提前给线路策略。
     top_routes = res.get("routes", {}).get("top_routes", [])
     route_risk = [g for g in top_routes if g.get("priority") in ("P0", "P1")]
-    if route_risk:
-        matched_ids.add("route_high_risk")
 
-    # 3. 品类（仅当统计验证显著才建议）
+    # 3. 品类必须同时通过轻量联合检验和深度模型中的至少一个品类项。
     rc_cat = next((t for t in verification.get("single_tests", [])
                    if t.get("factor") == "primary_category_name"), None)
-    if rc_cat and rc_cat.get("p_adjusted", 1) < 0.05:
+    category_adjusted = any(
+        str(term.get("term", "")).startswith("C(primary_category_name)")
+        and _term_significant(term)
+        for term in order_terms
+    )
+    if (rc_cat and rc_cat.get("p_adjusted", 1) < 0.05
+            and category_adjusted):
         matched_ids.add("category_high_lowscore")
 
     # 4. 卖家晚交运 / 多卖家（样例无对应字段，真库触发时补充）
@@ -109,17 +148,25 @@ def recommend_actions(provider: DataProvider, semantic: SemanticLayer,
 
     return {
         "ok": True,
+        "status": "generated_after_deep_validation",
         "recommendations": recommendations,
         "pending_verification": pending,
-        "basis": {"evidence_grade": grade, "or": late_ev.get("or")},
-        "note": "建议对应已验证证据；未验证/不显著因素不凭空建议；观察性、禁因果。",
+        "basis": {
+            "evidence_grade": grade,
+            "unadjusted_or": late_ev.get("or"),
+            "adjusted_late": late_adjusted,
+        },
+        "note": (
+            "建议只对应已通过多变量模型的特征；线路等仍未深度验证的因素不生成策略；"
+            "观察性、禁因果。"
+        ),
     }
 
 
 def _priority_of(rid: str, route_risk: list[dict]) -> str:
     if rid == "route_high_risk" and route_risk:
         return min(g["priority"] for g in route_risk)  # P0 > P1
-    if rid in ("delay_4d_plus", "delay_1_3d"):
+    if rid in ("delay_4d_plus", "delay_1_3d", "delay_overall"):
         return "P0" if rid == "delay_4d_plus" else "P1"
     if rid == "category_high_lowscore":
         return "P1"

@@ -13,6 +13,11 @@ from .semantic import SemanticLayer
 
 DEFAULT_LIMIT = 100
 MAX_LIMIT = 10000
+ALLOWED_FILTER_OPERATORS = {"=", "!=", "<>", ">", ">=", "<", "<=", "IN", "NOT IN"}
+REVIEW_METRICS = {
+    "reviewed_orders", "low_score_count", "low_score_orders",
+    "low_score_rate", "strict_negative_rate", "avg_review_score",
+}
 
 
 def _quote(v: Any) -> str:
@@ -24,14 +29,31 @@ def _quote(v: Any) -> str:
     return "'" + str(v).replace("'", "''") + "'"
 
 
-def _filters_sql(filters: dict) -> str:
-    """拼接筛选条件。键为列名，值为字面量或 {op, value} 结构。"""
+def _filters_sql(filters: dict, allowed_columns: set[str]) -> str:
+    """校验并拼接筛选条件；不接受语义字典之外的列或操作符。"""
+    if not isinstance(filters, dict):
+        raise ValueError("filters 必须是对象，格式为 {列: 值} 或 {列: {op, value}}")
     clauses = []
     for k, v in filters.items():
+        if k not in allowed_columns:
+            raise ValueError(f"筛选列不在当前表的维度白名单中: {k}")
         if isinstance(v, dict):
-            op = v.get("op", "=")
-            clauses.append(f'{k} {op} {_quote(v["value"])}')
+            if "value" not in v:
+                raise ValueError(f"筛选条件 {k} 缺少 value；应使用 {{op, value}} 格式")
+            op = str(v.get("op", "=")).strip().upper()
+            if op not in ALLOWED_FILTER_OPERATORS:
+                raise ValueError(f"筛选操作符不受支持: {op}")
+            value = v["value"]
+            if op in {"IN", "NOT IN"}:
+                if not isinstance(value, (list, tuple)) or not value:
+                    raise ValueError(f"筛选条件 {k} 使用 {op} 时 value 必须是非空数组")
+                quoted = ", ".join(_quote(item) for item in value)
+                clauses.append(f"{k} {op} ({quoted})")
+            else:
+                clauses.append(f"{k} {op} {_quote(value)}")
         else:
+            if isinstance(v, (list, tuple, set, dict)):
+                raise ValueError(f"筛选条件 {k} 的值格式不受支持")
             clauses.append(f"{k} = {_quote(v)}")
     return " AND ".join(clauses)
 
@@ -70,7 +92,7 @@ class Tools:
         - metrics: 指标名（必须存在于语义字典）
         - dimensions: 维度列（必须存在于语义字典）
         - filters: {列: 值} 或 {列: {op, value}}，作用于 mart 表原始列
-        - order_by: 指标名（用于排序）
+        - order_by: 本次指标或维度，可带 ASC/DESC；指标默认降序，维度默认升序
         - use_valid_sample: 是否自动附加配送分析有效样本口径
         """
         if table not in self._s.allowed_tables():
@@ -78,6 +100,10 @@ class Tools:
 
         metrics = metrics or []
         dimensions = dimensions or []
+        if not isinstance(metrics, list) or not all(isinstance(m, str) for m in metrics):
+            return {"ok": False, "error": "metrics 必须是指标名数组"}
+        if not isinstance(dimensions, list) or not all(isinstance(d, str) for d in dimensions):
+            return {"ok": False, "error": "dimensions 必须是维度名数组"}
         if not metrics:
             return {"ok": False, "error": "至少需要一个指标"}
 
@@ -103,22 +129,61 @@ class Tools:
         for name, expr in self._s.get_filters(table).items():
             if use_valid_sample and name == "valid_sample":
                 where.append(expr)
+            if name == "reviewed_only" and REVIEW_METRICS.intersection(metrics):
+                where.append(expr)
         if filters:
-            where.append(_filters_sql(filters))
+            try:
+                where.append(_filters_sql(filters, set(self._s.get_dimensions(table))))
+            except (TypeError, ValueError) as exc:
+                return {"ok": False, "error": f"筛选参数错误: {exc}"}
         if where:
             sql += " WHERE " + " AND ".join(where)
 
         if dimensions:
             sql += " GROUP BY " + ", ".join(dimensions)
 
-        # 排序：order_by 传指标名，映射到本次查询生成的别名
+        # 排序：兼容多字段写法；每个字段仍须在本次查询白名单中。
         if order_by:
-            alias = f"_m_{order_by}" if order_by in metrics else None
-            if alias not in aliases:
-                return {"ok": False, "error": f"order_by 必须是查询指标之一: {order_by}"}
-            sql += f" ORDER BY {alias} DESC"
+            if not isinstance(order_by, str):
+                return {"ok": False, "error": "order_by 必须是字符串"}
+            sort_terms = []
+            sort_fields = []
+            for raw_term in order_by.split(","):
+                parts = raw_term.strip().split()
+                if len(parts) == 1:
+                    field = parts[0]
+                    direction = "DESC" if field in metrics else "ASC"
+                elif len(parts) == 2 and parts[1].upper() in {"ASC", "DESC"}:
+                    field, direction = parts[0], parts[1].upper()
+                else:
+                    return {
+                        "ok": False,
+                        "error": "order_by 每项应为指标/维度名，可选 ASC 或 DESC",
+                    }
+                if field in metrics:
+                    sort_expr = f"_m_{field}"
+                elif field in dimensions:
+                    sort_expr = field
+                else:
+                    return {
+                        "ok": False,
+                        "error": f"order_by 必须是本次查询的指标或维度之一: {field}",
+                    }
+                sort_terms.append(f"{sort_expr} {direction}")
+                sort_fields.append(field)
+            # 聚合指标经常并列；追加分组维度作为稳定的最终排序键，避免 Top-N 漂移。
+            for dimension in dimensions:
+                if dimension not in sort_fields:
+                    sort_terms.append(f"{dimension} ASC")
+            sql += " ORDER BY " + ", ".join(sort_terms)
 
-        sql += f" LIMIT {min(int(limit), MAX_LIMIT)}"
+        try:
+            safe_limit = int(limit)
+        except (TypeError, ValueError):
+            return {"ok": False, "error": "limit 必须是整数"}
+        if safe_limit < 1:
+            return {"ok": False, "error": "limit 必须大于等于 1"}
+        sql += f" LIMIT {min(safe_limit, MAX_LIMIT)}"
 
         try:
             rows = self._p.execute(sql)

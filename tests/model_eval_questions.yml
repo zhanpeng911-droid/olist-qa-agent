@@ -1,0 +1,43 @@
+# DeepSeek 端到端评测集。与确定性核心评测分开，避免把代码通过率误称为模型稳定性。
+model_eval_questions:
+  - {id: M-01, category: 单指标, question: 当前有效订单的低评分率是多少？, expected_intent: query, table: mart_order_delivery, metrics: [low_score_rate]}
+  - {id: M-02, category: 单指标, question: 平台的延迟交付比例有多高？, expected_intent: query, table: mart_order_delivery, metrics: [late_rate]}
+  - {id: M-03, category: 单指标, question: 平均评价得分是多少？, expected_intent: query, table: mart_order_delivery, metrics: [avg_review_score]}
+  - {id: M-04, category: 单指标, question: 成交商品金额合计是多少？, expected_intent: query, table: mart_order_delivery, metrics: [gmv]}
+  - {id: M-05, category: 单指标, question: 运费一共收了多少？, expected_intent: query, table: mart_order_delivery, metrics: [freight_total]}
+  - {id: M-06, category: 复合指标, question: 同时告诉我订单量、低评分率、延迟率和平均评分。, expected_intent: query, table: mart_order_delivery, metrics: [order_count, low_score_rate, late_rate, avg_review_score]}
+  - {id: M-07, category: 复合指标, question: 对比商品成交额、运费总额与支付金额。, expected_intent: query, table: mart_order_delivery, metrics: [gmv, freight_total, payment_total]}
+  - {id: M-08, category: 复合指标, question: 支付审批和整个履约平均各用了几天？, expected_intent: query, table: mart_order_delivery, metrics: [avg_approval_days, avg_fulfillment_days]}
+  - {id: M-09, category: 分组, question: 按月查看低评分率走势。, expected_intent: query, table: mart_order_delivery, metrics: [low_score_rate], dimensions: [order_month]}
+  - {id: M-10, category: 分组, question: 对比延迟订单和未延迟订单的平均评分。, expected_intent: query, table: mart_order_delivery, metrics: [avg_review_score], dimensions: [is_late_delivery]}
+  - {id: M-11, category: 分组, question: 不同延迟档位的低评分率分别是多少？, expected_intent: query, table: mart_order_delivery, metrics: [low_score_rate], dimensions: [delay_bucket]}
+  - {id: M-12, category: 分组, question: 按支付方式拆开看低评分率。, expected_intent: query, table: mart_order_delivery, metrics: [low_score_rate], dimensions: [primary_payment_type]}
+  - {id: M-13, category: 分组, question: 各客户州的延迟率表现如何？, expected_intent: query, table: mart_order_delivery, metrics: [late_rate], dimensions: [customer_state]}
+  - {id: M-14, category: 排名, question: 找出低评分率最高的5个品类。, expected_intent: query, table: mart_order_delivery, metrics: [low_score_rate], dimensions: [primary_category_name]}
+  - {id: M-15, category: 排名, question: 哪5个卖家州的低评分率最高？, expected_intent: query, table: mart_order_seller_delivery, metrics: [low_score_rate], dimensions: [seller_state]}
+  - {id: M-16, category: 排名, question: 给我低评分风险最高的5条州际线路。, expected_intent: query, table: mart_order_seller_delivery, metrics: [low_score_rate], dimensions: [route]}
+  - {id: M-17, category: 口语改写, question: 晚到的单子是不是普遍打分更差？先把两组数据列出来。, expected_intent: query, table: mart_order_delivery, metrics: [avg_review_score], dimensions: [is_late_delivery]}
+  - {id: M-18, category: 口语改写, question: 哪些地方的客人更容易给三星及以下？列前五。, expected_intent: query, table: mart_order_delivery, metrics: [low_score_rate], dimensions: [customer_state]}
+  - {id: M-19, category: 口语改写, question: 看看每个月差评占比有没有变化。, expected_intent: query, table: mart_order_delivery, metrics: [low_score_rate], dimensions: [order_month]}
+  - {id: M-20, category: 口语改写, question: 跨省和省内配送的低评分率分别怎样？, expected_intent: query, table: mart_order_seller_delivery, metrics: [low_score_rate], dimensions: [cross_state]}
+  - {id: M-21, category: 统计方法, question: 分析低评分率与路线是否有显著相关。, expected_intent: statistical, method: pearson_chi_square}
+  - {id: M-22, category: 统计方法, question: 跨州与低评分是否存在显著关联？, expected_intent: statistical, method: binary_association}
+  - {id: M-23, category: 统计方法, question: 延迟档位越高低评分率是否呈显著上升趋势？, expected_intent: statistical, method: cochran_armitage_trend}
+  - {id: M-24, category: 统计方法, question: 延迟天数和评价分数是否显著相关？, expected_intent: statistical, method: spearman}
+  - {id: M-25, category: 统计方法, question: 运费在低评分和非低评分订单之间有显著差异吗？, expected_intent: statistical, method: mann_whitney_u}
+  - {id: M-26, category: 统计方法, question: 不同品类的评价分数分布是否存在显著差异？, expected_intent: statistical, method: kruskal_wallis}
+  - {id: M-27, category: 归因, question: 请对低评分进行多维归因，完成单变量筛选和调整后验证。, expected_intent: attribution, expect_adjusted: true}
+  - {id: M-28, category: 归因, question: 为什么会有低评分？请只给出统计证据和具体分布，不要生成治理策略。, expected_intent: attribution, expect_adjusted: true}
+  - {id: M-29, category: 复合问题, question: 先给出总体低评分率，再按品类找出最高的5类。, expected_intent: query, table: mart_order_delivery, metrics: [low_score_rate], dimensions: [primary_category_name]}
+  - {id: M-30, category: 复合问题, question: 同时比较各线路的延迟率和低评分率，并列出风险最高的线路。, expected_intent: query, table: mart_order_seller_delivery, metrics: [late_rate, low_score_rate], dimensions: [route]}
+  - {id: M-31, category: 深度验证, question: 深度验证是否延迟、延迟程度、总履约时长、地区、跨州及高风险线路与低评分的关系。, expected_intent: deep_validation, expected_features: [is_late_delivery, late_days, fulfillment_days, customer_state, seller_state, cross_state, route], expect_route_holdout: true}
+  - {id: M-32, category: 深度验证改写, question: 控制混杂因素后，检查是否延迟、跨州、地区和线路还会不会提高低评分风险。, expected_intent: deep_validation, expected_features: [is_late_delivery, customer_state, seller_state, cross_state, route], expect_route_holdout: true}
+  - {id: M-33, category: 深度验证子集, question: 调整后验证品类、支付方式和商品金额与低评分是否仍有关联。, expected_intent: deep_validation, expected_features: [primary_category_name, primary_payment_type, price_total]}
+  - {id: M-34, category: 留出验证, question: 用留出数据验证高风险线路是否稳定。, expected_intent: deep_validation, expected_features: [route], expect_route_holdout: true}
+  - {id: M-35, category: 深度验证默认, question: 请对低评分进行深度验证。, expected_intent: deep_validation, expected_features: [is_late_delivery, late_days, fulfillment_days, customer_state, seller_state, cross_state, route], expect_route_holdout: true}
+  - {id: M-36, category: 层级边界, question: 线路和低评分有没有显著关系？, expected_intent: statistical, method: pearson_chi_square}
+  - {id: M-37, category: 归因边界, question: 请对低评分进行归因，只列出调整后证据和分布，不要给治理策略。, expected_intent: attribution, expect_adjusted: true}
+  - {id: M-38, category: 线路复合指标, question: 按线路同时比较延迟率和低评分率。, expected_intent: query, table: mart_order_seller_delivery, metrics: [late_rate, low_score_rate], dimensions: [route]}
+  - {id: M-39, category: 双维度问数, question: 按品类和支付方式交叉查看低评分率。, expected_intent: query, table: mart_order_delivery, metrics: [low_score_rate], dimensions: [primary_category_name, primary_payment_type]}
+  - {id: M-40, category: 口语排名, question: 哪些收货地区又容易晚到又容易给低分？按客户州列出来。, expected_intent: query, table: mart_order_delivery, metrics: [late_rate, low_score_rate], dimensions: [customer_state]}
+  - {id: M-41, category: 归因目标边界, question: 请对延迟进行归因分析。, expected_intent: attribution, expect_supported: false}
