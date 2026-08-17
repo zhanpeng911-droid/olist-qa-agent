@@ -39,8 +39,20 @@
         <div class="topbar-left">
           <h1>{{ route.meta.title || '总览' }}</h1>
         </div>
+        <div class="topbar-search">
+          <el-input
+            v-model="searchQ"
+            placeholder="搜索或输入你的问题…"
+            clearable
+            @keyup.enter="doSearch"
+          >
+            <template #prefix><el-icon><Search /></el-icon></template>
+          </el-input>
+        </div>
         <div class="topbar-right">
-          <span v-if="route.path === '/dashboard'" class="range-tag">📅 全量数据 · 2016-09 ~ 2018-10</span>
+          <span v-if="route.path === '/dashboard'" class="range-tag">
+            📅 全量数据 · 2016-09 ~ 2018-10 <span class="chev">⌄</span>
+          </span>
           <button class="icon-btn" aria-label="通知"><el-icon :size="18"><Bell /></el-icon></button>
           <div class="user">
             <div class="avatar">企</div>
@@ -61,14 +73,24 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { useRoute } from 'vue-router'
-import { Bell } from '@element-plus/icons-vue'
+import { useRoute, useRouter } from 'vue-router'
+import { Bell, Search } from '@element-plus/icons-vue'
 import { getMeta } from '../api'
 
 const route = useRoute()
+const router = useRouter()
 const meta = ref<any>(null)
+const searchQ = ref('')
 
 const sourceLabel = computed(() => meta.value?.source_label ?? '加载中…')
+
+// 顶部搜索：跳转到对话页并自动发送问题
+function doSearch() {
+  const q = searchQ.value.trim()
+  if (!q) return
+  router.push({ path: '/chat', query: { q } })
+  searchQ.value = ''
+}
 
 const groups = [
   {
@@ -150,20 +172,28 @@ onMounted(async () => {
 .topbar {
   height: 72px; padding: 0 28px 0 32px;
   display: flex; align-items: center; justify-content: space-between;
+  gap: 20px;
   background: var(--card); border-bottom: 1px solid var(--border-soft);
   flex-shrink: 0;
 }
 .topbar h1 { font-size: 20px; font-weight: 700; margin: 0; white-space: nowrap; }
+.topbar-search { flex: 1; max-width: 420px; }
+.topbar-search :deep(.el-input__wrapper) {
+  border-radius: var(--radius-pill);
+  background: var(--bg);
+  box-shadow: none !important;
+}
 .topbar-right {
   display: flex; align-items: center; gap: 18px;
-  min-width: 0;
+  min-width: 0; flex-shrink: 0;
 }
 .period { width: 120px; flex-shrink: 0; }
 .range-tag {
   font-size: 12px; color: var(--text-2); background: var(--bg);
   padding: 6px 12px; border-radius: var(--radius-pill);
-  white-space: nowrap;
+  white-space: nowrap; display: inline-flex; align-items: center; gap: 4px;
 }
+.range-tag .chev { color: var(--text-3); font-size: 10px; }
 .icon-btn {
   border: none; background: var(--bg); cursor: pointer;
   width: 38px; height: 38px; border-radius: 50%;

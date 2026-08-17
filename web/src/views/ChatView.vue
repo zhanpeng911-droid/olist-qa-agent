@@ -75,11 +75,13 @@
 </template>
 
 <script setup lang="ts">
-import { nextTick, ref } from 'vue'
+import { nextTick, onMounted, ref } from 'vue'
+import { useRoute } from 'vue-router'
 import { Delete, Promotion } from '@element-plus/icons-vue'
 import { chatStream } from '../api'
 import ResultCard from '../components/cards/ResultCard.vue'
 
+const route = useRoute()
 const input = ref('')
 const sending = ref(false)
 const messages = ref<any[]>([])
@@ -163,6 +165,12 @@ async function send(q?: unknown) {
 function scrollBottom() {
   nextTick(() => { bodyEl.value?.scrollTo({ top: bodyEl.value.scrollHeight, behavior: 'smooth' }) })
 }
+
+// 顶部搜索框传入的问题：进入页面自动发送
+onMounted(() => {
+  const q = route.query.q as string | undefined
+  if (q && q.trim()) send(q)
+})
 </script>
 
 <style scoped>
