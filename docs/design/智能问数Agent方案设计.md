@@ -371,3 +371,18 @@ olist-qa-agent/
 
 ### 11.4 二期
 设置页（数据源/评测）、登录权限与审计、报告导出（PDF/Excel）、DeepSeek 逐 token 流式、更多图表（漏斗/地图）。
+
+---
+
+## 12. 开发规范：确定性-LLM 分工原则（2026-08-17 确立）
+
+> 背景：全量联调中发现确定性解析"部分识别当成功"的静默降级缺陷（维度丢失仍返回单值）。
+
+**铁律**：
+1. **能确定的用确定性快路径**（query/statistical/attribution 等专用模块，可对账、快、省 LLM 成本）
+2. **不能确定的明确回退 LLM**（DeepSeek ReAct 兜底），**绝不静默降级**给"看似正确"的部分答案
+3. 判定"确定性覆盖不了"的标准：解析不完整（维度暗示未识别 / 指标未识别 / 模块不支持）或执行失败
+4. **持续补全别名库**（query_analysis.METRIC/DIMENSION_ALIASES），扩大确定性覆盖、减少 LLM 调用
+5. 无 LLM key 时给出明确提示，不用 Mock 冒充真实结果
+
+**已落地**：query incomplete 检测 + server 三处 ReAct 兜底（query/statistical/deep_validation）；详见 TEST_LOG §26。
