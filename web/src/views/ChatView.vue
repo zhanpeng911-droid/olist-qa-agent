@@ -85,6 +85,13 @@ const prompts = [
   { icon: '🚚', title: '异常排查', desc: '延迟 15 天以上的订单表现', prompt: '延迟 15 天以上的订单低评分率是多少' },
 ]
 
+const INTENT_LABEL: Record<string, string> = {
+  attribution: '归因分析', statistical: '统计检验', query: '指标查询',
+  deep_validation: '深度验证', meta: '口径询问', other: '智能对话',
+}
+
+function intentLabel(i: string) { return INTENT_LABEL[i] ?? i }
+
 // 按意图给出推荐追问
 function suggestionsFor(intent: string): string[] {
   const map: Record<string, string[]> = {
