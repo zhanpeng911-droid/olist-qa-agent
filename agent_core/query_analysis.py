@@ -31,8 +31,8 @@ METRIC_ALIASES = {
 }
 
 DIMENSION_ALIASES = {
-    "order_month": ("按月份", "按月", "每月", "各月", "月份走势"),
-    "primary_category_name": ("按品类", "各品类", "不同品类", "品类和"),
+    "order_month": ("按月份", "按月", "每月", "各月", "月份走势", "月度趋势", "月度", "每月趋势", "每个月"),
+    "primary_category_name": ("按品类", "各品类", "不同品类", "品类和", "商品品类", "品类"),
     "primary_payment_type": ("按支付方式", "各支付方式", "不同支付方式", "支付方式交叉"),
     "delay_bucket": ("延迟档位", "延迟分档", "各延迟档"),
     "is_late_delivery": (
@@ -43,6 +43,9 @@ DIMENSION_ALIASES = {
     "cross_state": ("跨州和同州", "跨州与同州", "跨省和省内", "是否跨州"),
     "customer_state": ("按客户州", "各客户州", "收货地区", "客户地区"),
 }
+
+# 出现这些词说明用户期望分组/对比/趋势，但未识别出维度时视为“解析不完整”
+DIMENSION_HINTS = ("各", "对比", "按", "趋势", "分布", "不同", "分别", "分类", "哪些", "排行")
 
 METRIC_LABELS = {
     "order_count": "订单量",
@@ -150,9 +153,15 @@ def plan_query_question(question: str, semantic: SemanticLayer) -> dict:
             order_by = "late_rate" if "late_rate" in metrics else metrics[0]
         else:
             order_by = metrics[0]
+    # 完整性检测：用户明显要求分组/对比/趋势但未识别出维度 → 解析不完整（由上层回退 LLM）
+    incomplete = bool(
+        metrics and not dimensions
+        and any(h in question for h in DIMENSION_HINTS)
+    )
     return {
         "ok": True,
         "recognized": True,
+        "incomplete": incomplete,
         "table": table,
         "metrics": list(dict.fromkeys(metrics)),
         "dimensions": list(dict.fromkeys(dimensions)),

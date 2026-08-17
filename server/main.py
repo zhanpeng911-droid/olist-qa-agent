@@ -29,7 +29,7 @@ from agent_core.deep_validation import analyze_deep_validation  # noqa: E402
 from agent_core.intent import Intent  # noqa: E402
 from agent_core.llm import MockLLM, create_llm  # noqa: E402
 from agent_core.loop import ReActLoop  # noqa: E402
-from agent_core.query_analysis import analyze_query_question  # noqa: E402
+from agent_core.query_analysis import analyze_query_question, plan_query_question  # noqa: E402
 from agent_core.semantic import SemanticLayer  # noqa: E402
 from agent_core.statistical_analysis import analyze_statistical_question  # noqa: E402
 
@@ -169,6 +169,19 @@ def _sse(event: str, data) -> str:
     return f"event: {event}\ndata: {payload}\n\n"
 
 
+def _react_answer(question: str, provider, semantic) -> dict:
+    """ReAct（LLM）兜底：确定性解析不完整/失败时回退智能推理。"""
+    try:
+        llm = create_llm()
+    except RuntimeError as e:
+        return {
+            "answer": f"未配置 DEEPSEEK_API_KEY，无法智能解析该问题（{e}）。",
+            "trace": [], "ok": False,
+        }
+    loop = ReActLoop(llm, provider, semantic)
+    return loop.run(question)
+
+
 @app.post("/api/chat")
 async def api_chat(body: QuestionBody):
     async def gen() -> AsyncGenerator[str, None]:
@@ -178,13 +191,31 @@ async def api_chat(body: QuestionBody):
         provider = get_provider()
         try:
             if intent == "query":
-                yield _sse("running", {"stage": "执行指标查询…"})
-                res = analyze_query_question(provider, semantic, body.question)
-                yield _sse("result", res)
+                # 确定性解析不完整（要求分组/对比/趋势但维度未识别）→ 回退 LLM
+                plan = plan_query_question(body.question, semantic)
+                if plan.get("incomplete"):
+                    yield _sse("running", {"stage": "智能解析中…"})
+                    res = _react_answer(body.question, provider, semantic)
+                    for t in res.get("trace", []):
+                        yield _sse("step", t)
+                    yield _sse("answer", {"answer": res.get("answer", ""),
+                                          "ok": res.get("ok", False)})
+                else:
+                    yield _sse("running", {"stage": "执行指标查询…"})
+                    res = analyze_query_question(provider, semantic, body.question)
+                    yield _sse("result", res)
             elif intent == "statistical":
                 yield _sse("running", {"stage": "进行统计检验…"})
                 res = analyze_statistical_question(provider, body.question)
-                yield _sse("result", res)
+                if res.get("ok") is False or res.get("error"):
+                    yield _sse("running", {"stage": "确定性检验未覆盖，改用智能推理…"})
+                    res2 = _react_answer(body.question, provider, semantic)
+                    for t in res2.get("trace", []):
+                        yield _sse("step", t)
+                    yield _sse("answer", {"answer": res2.get("answer", ""),
+                                          "ok": res2.get("ok", False)})
+                else:
+                    yield _sse("result", res)
             elif intent == "attribution":
                 yield _sse("running", {"stage": "进行低评分关联因素分析…"})
                 res = _cached_attribution(body.question)
@@ -192,21 +223,19 @@ async def api_chat(body: QuestionBody):
             elif intent == "deep_validation":
                 yield _sse("running", {"stage": "进行深度验证…"})
                 res = analyze_deep_validation(provider, body.question)
-                yield _sse("result", res)
+                if res.get("ok") is False or res.get("error"):
+                    yield _sse("running", {"stage": "深度验证未覆盖，改用智能推理…"})
+                    res2 = _react_answer(body.question, provider, semantic)
+                    for t in res2.get("trace", []):
+                        yield _sse("step", t)
+                    yield _sse("answer", {"answer": res2.get("answer", ""),
+                                          "ok": res2.get("ok", False)})
+                else:
+                    yield _sse("result", res)
             else:
                 yield _sse("running", {"stage": "模型推理中…"})
-                try:
-                    llm = create_llm()
-                except RuntimeError as e:
-                    llm = MockLLM(
-                        tool_call={"tool": "query_mart",
-                                   "args": {"table": "mart_order_delivery",
-                                            "metrics": ["low_score_rate"]}},
-                        answer="（未配置 DEEPSEEK_API_KEY，Mock 演示）已查询低评分率。")
-                    yield _sse("warning", {"message": str(e)})
-                loop = ReActLoop(llm, provider, semantic)
-                res = loop.run(body.question)
-                for t in res.get("trace", []):      # 回放工具执行过程
+                res = _react_answer(body.question, provider, semantic)
+                for t in res.get("trace", []):
                     yield _sse("step", t)
                 yield _sse("answer", {"answer": res.get("answer", ""),
                                       "ok": res.get("ok", False)})
