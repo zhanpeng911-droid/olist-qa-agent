@@ -90,6 +90,11 @@
 
     <!-- 查询结果 -->
     <template v-else-if="intent === 'query'">
+      <!-- 未识别/空结果友好提示 -->
+      <div v-if="!heroItems.length && !hasTable" class="query-empty">
+        <span class="qe-icon">💡</span>
+        {{ d.error || '未识别到明确的指标，试试：「总体低评分率是多少」或「各客户州的低评分率对比」' }}
+      </div>
       <!-- 核心指标大数字（优先业务化 display_rows） -->
       <div v-if="heroItems.length" class="query-hero">
         <div class="hero-item" v-for="h in heroItems" :key="h.label">
@@ -100,7 +105,7 @@
       <p v-if="d.answer" class="rc-conclusion">{{ d.answer }}</p>
 
       <!-- 分组表格（有维度时） -->
-      <el-table v-if="d.dimensions?.length && d.display_rows?.length" :data="d.display_rows" size="small" max-height="300" border>
+      <el-table v-if="hasTable" :data="d.display_rows" size="small" max-height="300" border>
         <el-table-column
           v-for="k in Object.keys(d.display_rows[0])" :key="k"
           :prop="k" :label="k" min-width="120"
@@ -108,7 +113,7 @@
       </el-table>
 
       <!-- 执行明细折叠（技术参数收拢） -->
-      <el-collapse class="rc-detail">
+      <el-collapse v-if="d.sql" class="rc-detail">
         <el-collapse-item title="🔍 查看分析逻辑与 SQL 执行明细">
           <div class="detail-line">来源表：<b>{{ tableLabel(d.table) }}</b>（{{ d.table }}）</div>
           <div class="detail-line">执行模式：<b>{{ modeLabel(d.execution_mode) }}</b> · 数据行 {{ d.row_count ?? 0 }}</div>
@@ -159,6 +164,9 @@ const heroItems = computed(() => {
   }
   return []
 })
+const hasTable = computed(() =>
+  props.d?.dimensions?.length && props.d?.display_rows?.length,
+)
 
 const TABLE_LABEL: Record<string, string> = {
   mart_order_delivery: '订单交付宽表',
@@ -193,6 +201,12 @@ function shortTerm(t: string) {
 .rc-conclusion { color: var(--text-1); font-size: 14px; line-height: 1.7; }
 .rc-error { background: var(--red-bg); color: var(--red); padding: 8px 12px; border-radius: var(--radius-sm); font-size: 12px; margin-bottom: 10px; }
 .query-hero { display: flex; gap: 14px; flex-wrap: wrap; margin-bottom: 12px; }
+.query-empty {
+  display: flex; align-items: center; gap: 8px;
+  background: #FFF7ED; border: 1px solid #FED7AA; border-radius: var(--radius-md);
+  padding: 12px 14px; font-size: 13px; color: #92400E; margin-bottom: 10px;
+}
+.qe-icon { font-size: 16px; }
 .hero-item {
   background: var(--bg); border-radius: var(--radius-md); padding: 14px 18px;
   display: flex; flex-direction: column; gap: 4px; min-width: 120px;
