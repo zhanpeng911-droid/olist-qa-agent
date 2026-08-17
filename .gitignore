@@ -9,6 +9,7 @@ __pycache__/
 
 # Mart 截取样本（本地数据，不提交）
 data/sample/mart_order_*.csv
+sample_data/
 
 # 系统
 .DS_Store
@@ -17,3 +18,7 @@ streamlit*.log
 logs/*.log
 artifacts/runtime_logs/*.log
 artifacts/evaluations/*.json
+
+# 前端构建产物
+web/node_modules/
+web/dist/

@@ -1,0 +1,79 @@
+/* ============================================================
+   Olist 智能问数 Agent — 设计体系 Tokens
+   Modern SaaS · Clean Minimalist · Soft Blue · Rounded Card
+   ============================================================ */
+:root {
+  /* 色彩 */
+  --bg: #F4F7FB;              /* 页面大底色：极淡冷灰蓝 */
+  --card: #FFFFFF;            /* 卡片纯白 */
+  --primary: #2F65F6;         /* 主品牌电光蓝 */
+  --primary-deep: #2563EB;
+  --sky: #38BDF8;             /* 天空蓝 */
+  --accent: #00C5FF;          /* 青蓝 */
+  --green: #10B981;           /* 增长薄荷绿 */
+  --green-bg: rgba(16, 185, 129, 0.10);
+  --red: #F43F5E;             /* 下降珊瑚粉 */
+  --red-bg: rgba(244, 63, 94, 0.10);
+  --text-1: #0F172A;          /* 一级标题/核心数字 */
+  --text-2: #64748B;          /* 二级/导航 */
+  --text-3: #94A3B8;          /* 辅助/提示 */
+  --border-soft: rgba(15, 23, 42, 0.06);
+
+  /* 圆角 */
+  --radius-lg: 20px;
+  --radius-md: 12px;
+  --radius-sm: 8px;
+  --radius-pill: 9999px;
+
+  /* 阴影：超低透明度漫反射微阴影 */
+  --shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.03);
+  --shadow-hover: 0 16px 35px -8px rgba(47, 101, 246, 0.10);
+
+  /* 字体与间距 */
+  --font: 'Inter', 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont,
+          'PingFang SC', 'Microsoft YaHei', sans-serif;
+  --pad: 24px;
+}
+
+* { box-sizing: border-box; }
+html, body, #app { height: 100%; margin: 0; }
+body {
+  font-family: var(--font);
+  background: var(--bg);
+  color: var(--text-1);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* 通用卡片：大圆角 + 微阴影 + 高呼吸感 */
+.s-card {
+  background: var(--card);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow);
+  padding: var(--pad);
+  transition: box-shadow .2s ease, transform .2s ease;
+}
+.s-card.hoverable:hover {
+  box-shadow: var(--shadow-hover);
+  transform: translateY(-2px);
+}
+.s-card .s-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-2);
+  margin: 0 0 16px;
+  letter-spacing: .2px;
+}
+
+/* 胶囊标签 */
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border-radius: var(--radius-pill);
+  padding: 3px 10px;
+  font-size: 12px;
+  font-weight: 600;
+}
+.pill.up { color: var(--green); background: var(--green-bg); }
+.pill.down { color: var(--red); background: var(--red-bg); }
+.pill.flat { color: var(--text-2); background: rgba(100, 116, 139, 0.10); }

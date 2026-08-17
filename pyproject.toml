@@ -3,6 +3,7 @@ name = "olist-qa-agent"
 version = "0.1.0"
 requires-python = ">=3.12"
 dependencies = [
+    "fastapi>=0.141.1",
     "openai>=3.0.0",
     "pandas>=2.3.0",
     "pymysql>=1.2.0",
@@ -12,4 +13,5 @@ dependencies = [
     "scipy>=1.13.0",
     "statsmodels>=0.14.2",
     "streamlit>=1.32.0",
+    "uvicorn>=0.52.1",
 ]

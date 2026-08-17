@@ -453,3 +453,44 @@ M4 覆盖：建议结构/可执行性/证据对应/无未验证建议 + 安全�
 - 州/品类/月份/卖家州：因达到样本门槛(100)的分组不足而"未执行"——1000 行截取样本所致，非代码问题（全量 9.9 万行可执行）
 - 结论：MySQLProvider 全流程（字段映射/意图/单变量/多变量）正常
 
+---
+
+## 23. 正式 UI（FastAPI + Vue3）
+
+> 日期：2026-08-17
+> 定位：替代 Streamlit demo 的企业级正式界面（首期核心两页，按 Modern SaaS 设计体系）
+
+### 23.1 技术栈
+- 后端：FastAPI + uvicorn（`server/main.py`），包装 agent_core 为 REST + SSE API，核心逻辑零改动
+- 前端：Vue3 + Vite + TS + Element Plus + ECharts + Pinia + axios（`web/`）
+- 数据源：固定后端配置（默认 ProjectCsvProvider；`USE_MYSQL=1` 用 MySQLProvider）
+
+### 23.2 后端 API
+- `POST /api/intent` / `query` / `statistical` / `attribution` / `deep-validation`（返回 agent dict 整包透传）
+- `GET /api/meta`（语义字典 + 数据源标签）；`POST /api/chat`（**SSE 流式**：intent→running→result/step→answer→done）
+- 生产模式：`web/dist` 存在时托管静态前端（单端口 8000）
+
+### 23.3 前端页面（首期两页）
+- **总览看板** `/dashboard`：KPI 指标栏（低评分率/延迟率/样本/平均评分 + pill + sparkline）+ 延迟分档面积图 + 品类 Donut + 州条形图
+- **智能对话** `/chat`：SSE 流式对话 + 结果卡片（归因→优先级表格+OR 森林图+建议；统计→方法/p/效应量；查询→表格+SQL）
+- 设计体系：底色 #F4F7FB / 白卡 #FFF / 主蓝 #2F65F6 / 渐变青蓝 / 薄荷绿 #10B981 / 珊瑚粉 #F43F5E；大圆角 16-24px；微阴影 `0 10px 25px -5px rgba(0,0,0,.03)`；Inter 字体；高呼吸感
+
+### 23.4 验证
+- 后端 API 测试 `tests/test_api.py`：7/7 通过（intent/query/statistical/attribution/deep-validation/meta/SSE chat）
+- 全量 `uv run pytest tests/` → **140 passed, 1 skipped**
+- `npm run build` 成功（dist 生成）；正式 UI 启动冒烟：GET / → 200；/api/intent 正常；SSE chat 返回 intent→running→result→done 完整事件流
+
+### 23.5 运行方式
+```bash
+# 开发（后端 + 前端热更新）
+uv run uvicorn server.main:app --port 8000
+cd web && npm run dev          # http://127.0.0.1:5173（proxy /api → :8000）
+
+# 生产（单端口）
+cd web && npm run build
+uv run uvicorn server.main:app --port 8000   # http://127.0.0.1:8000
+```
+
+### 23.6 二期（未做）
+- 设置页（数据源/评测）、登录权限与审计、报告导出（PDF/Excel）、DeepSeek 逐 token 流式
+

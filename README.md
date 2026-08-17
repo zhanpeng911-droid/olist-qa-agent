@@ -51,8 +51,13 @@ uv run python tests/run_model_eval.py --source mysql --repeat 3
 # 5. 命令行交互（未配置 key 时使用内置示例响应检查流程）
 uv run python run.py "请对低评分进行归因分析"
 
-# 6. 启动网页界面
+# 6. 启动网页界面（Streamlit Demo，⚠ 非最终 UI）
 uv run streamlit run ui/app.py   # 浏览器打开 http://localhost:8501
+
+# 7. 正式 UI（FastAPI + Vue3，企业级设计体系）
+uv run uvicorn server.main:app --port 8000   # 后端 + 前端（生产单端口）
+# 前端开发模式：cd web && npm install && npm run dev（proxy /api → :8000）
+# 前端构建：cd web && npm run build（产物由后端自动托管）
 ```
 
 DeepSeek重复评测会在每题结束后即时写入 `artifacts/evaluations/`。单题失败会记录意图、完成状态、工具路径和错误类型，并继续执行后续题目，不会终止整批评测。

@@ -348,3 +348,26 @@ olist-qa-agent/
 2. M2：L2 描述性归因（候选因素扫描、贡献拆解、排序）。
 3. 接真实 MySQL（实现 `MySQLProvider`，按标准字段名对齐真实 mart 表）。
 4. 更新 TEST_LOG 记录每次变更与测试。
+
+---
+
+## 11. 正式 UI（FastAPI + Vue3，企业级）
+
+> 状态：首期已实现（核心两页）；替代 4.10 的 Streamlit Demo 作为企业正式界面。
+
+### 11.1 技术栈
+- 后端：`server/main.py`（FastAPI + uvicorn），把 agent_core 包装为 REST + SSE API，核心逻辑零改动
+- 前端：`web/`（Vue3 + Vite + TS + Element Plus + ECharts + Pinia），按 Modern SaaS 设计体系
+- 数据源：固定后端配置（默认 ProjectCsvProvider；`USE_MYSQL=1` 用 MySQLProvider）
+
+### 11.2 API
+- `POST /api/intent` / `query` / `statistical` / `attribution` / `deep-validation`（透传 agent dict）
+- `GET /api/meta`（语义字典 + 数据源标签）；`POST /api/chat`（**SSE 流式**：intent→running→result/step→answer→done）
+- 生产模式托管 `web/dist`（单端口 8000）
+
+### 11.3 页面（首期）
+- **总览看板** `/dashboard`：KPI 栏（低评分率/延迟率/样本/平均评分 + Sparkline）+ 延迟分档面积图 + 品类 Donut + 州条形图
+- **智能对话** `/chat`：SSE 流式 + 结果卡片（归因→优先级表+OR 森林图+建议；统计→方法/p/效应量；查询→表格+SQL）
+
+### 11.4 二期
+设置页（数据源/评测）、登录权限与审计、报告导出（PDF/Excel）、DeepSeek 逐 token 流式、更多图表（漏斗/地图）。
