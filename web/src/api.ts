@@ -1,6 +1,6 @@
 import axios from 'axios'
 
-const http = axios.create({ baseURL: '/api', timeout: 120000 })
+const http = axios.create({ baseURL: '/api', timeout: 300000 })  // 全量归因可达 2-3 分钟
 
 export async function getIntent(question: string): Promise<string> {
   const { data } = await http.post('/intent', { question })

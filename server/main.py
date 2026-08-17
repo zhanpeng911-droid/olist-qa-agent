@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import time
 from pathlib import Path
 from typing import AsyncGenerator
 
@@ -39,6 +40,26 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+# ---------- 归因结果缓存（全量统计耗时长，缓存避免重复计算） ----------
+_ATTR_CACHE: dict[str, tuple[float, dict]] = {}
+_ATTR_CACHE_TTL = 300          # 5 分钟
+
+
+def _cached_attribution(question: str) -> dict:
+    key = question or "default"
+    now = time.time()
+    hit = _ATTR_CACHE.get(key)
+    if hit and now - hit[0] < _ATTR_CACHE_TTL:
+        return hit[1]
+    provider = get_provider()
+    try:
+        res = run_attribution(provider, get_semantic(), question=question or None)
+    finally:
+        provider.close()
+    _ATTR_CACHE[key] = (now, res)
+    return res
 
 
 # ---------- 数据源（固定后端配置） ----------
@@ -111,12 +132,7 @@ def api_statistical(body: QuestionBody):
 
 @app.post("/api/attribution")
 def api_attribution(body: QuestionBody):
-    provider = get_provider()
-    try:
-        return _json(run_attribution(provider, get_semantic(),
-                                     question=body.question or None))
-    finally:
-        provider.close()
+    return _json(_cached_attribution(body.question or ""))
 
 
 @app.post("/api/deep-validation")
@@ -171,7 +187,7 @@ async def api_chat(body: QuestionBody):
                 yield _sse("result", res)
             elif intent == "attribution":
                 yield _sse("running", {"stage": "进行低评分关联因素分析…"})
-                res = run_attribution(provider, semantic, question=body.question)
+                res = _cached_attribution(body.question)
                 yield _sse("result", res)
             elif intent == "deep_validation":
                 yield _sse("running", {"stage": "进行深度验证…"})
