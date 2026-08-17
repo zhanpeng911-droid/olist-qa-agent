@@ -14,6 +14,11 @@ from .semantic import SemanticLayer
 DEFAULT_LIMIT = 100
 MAX_LIMIT = 10000
 ALLOWED_FILTER_OPERATORS = {"=", "!=", "<>", ">", ">=", "<", "<=", "IN", "NOT IN"}
+# 可作过滤条件的数值列（不参与 GROUP BY，仅用于 WHERE）
+FILTERABLE_COLUMNS = {
+    "late_days", "delivery_variance_days", "review_score", "price_total",
+    "freight_total", "payment_value", "approval_days", "fulfillment_days",
+}
 REVIEW_METRICS = {
     "reviewed_orders", "low_score_count", "low_score_orders",
     "low_score_rate", "strict_negative_rate", "avg_review_score",
@@ -132,8 +137,9 @@ class Tools:
             if name == "reviewed_only" and REVIEW_METRICS.intersection(metrics):
                 where.append(expr)
         if filters:
+            filter_cols = set(self._s.get_dimensions(table)) | FILTERABLE_COLUMNS
             try:
-                where.append(_filters_sql(filters, set(self._s.get_dimensions(table))))
+                where.append(_filters_sql(filters, filter_cols))
             except (TypeError, ValueError) as exc:
                 return {"ok": False, "error": f"筛选参数错误: {exc}"}
         if where:

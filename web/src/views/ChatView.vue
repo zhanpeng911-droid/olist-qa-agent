@@ -30,6 +30,13 @@
                 {{ s.event === 'tool' ? `🔧 调用工具 ${s.tool}` : s.event }}
               </div>
             </div>
+            <!-- 意图澄清：模糊/空结果时给维度选择 -->
+            <div v-if="m.clarify?.length" class="suggestions">
+              <span class="suggest-label">请问按哪个维度对比？</span>
+              <button v-for="c in m.clarify" :key="c.prompt" class="suggest-chip" @click="send(c.prompt)">
+                {{ c.label }}
+              </button>
+            </div>
             <!-- 追问胶囊 -->
             <div v-if="m.suggestions?.length" class="suggestions">
               <span class="suggest-label">继续追问：</span>
@@ -123,7 +130,20 @@ async function send(q?: unknown) {
       (event, data) => {
         if (event === 'intent') ai.intent = data.intent
         else if (event === 'running') ai.running = data.stage
-        else if (event === 'result') { ai.result = data; ai.running = '' }
+        else if (event === 'result') {
+          ai.result = data
+          ai.running = ''
+          // 模糊指代或空结果 → 意图澄清（维度选择）
+          const vague = /另一个维度|其他维度|别的维度|换个维度|对比别的|换一个|别的指标|另一种/.test(question)
+          const emptyQ = data?.intent === 'query' && !(data?.display_rows?.length)
+          if (vague || emptyQ) {
+            ai.clarify = [
+              { label: '🗺️ 按客户所在州对比', prompt: '各客户州的低评分率对比' },
+              { label: '💳 按支付方式对比', prompt: '各支付方式的低评分率对比' },
+              { label: '📦 按商品品类对比', prompt: '各商品品类的低评分率对比' },
+            ]
+          }
+        }
         else if (event === 'step') { ai.steps.push(data); scrollBottom() }
         else if (event === 'answer') ai.text = data.answer
         else if (event === 'warning') ai.warning = data.message

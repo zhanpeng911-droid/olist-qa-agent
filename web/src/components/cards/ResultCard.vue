@@ -90,18 +90,31 @@
 
     <!-- 查询结果 -->
     <template v-else-if="intent === 'query'">
-      <div class="rc-row">
-        <div class="rc-metric"><span>模式</span><b>{{ d.execution_mode ?? '确定' }}</b></div>
-        <div class="rc-metric"><span>数据行</span><b>{{ d.row_count ?? 0 }}</b></div>
-        <div class="rc-metric"><span>表</span><b>{{ d.table ?? '—' }}</b></div>
+      <!-- 核心指标大数字（优先业务化 display_rows） -->
+      <div v-if="heroItems.length" class="query-hero">
+        <div class="hero-item" v-for="h in heroItems" :key="h.label">
+          <span class="hero-label">{{ h.label }}</span>
+          <b class="hero-value">{{ h.value }}</b>
+        </div>
       </div>
       <p v-if="d.answer" class="rc-conclusion">{{ d.answer }}</p>
-      <div v-if="d.rows?.length">
-        <el-table :data="d.rows" size="small" max-height="300" border>
-          <el-table-column v-for="k in Object.keys(d.rows[0])" :key="k" :prop="k" :label="k" min-width="110" />
-        </el-table>
-      </div>
-      <div v-if="d.sql" class="rc-sql">SQL：{{ d.sql }}</div>
+
+      <!-- 分组表格（有维度时） -->
+      <el-table v-if="d.dimensions?.length && d.display_rows?.length" :data="d.display_rows" size="small" max-height="300" border>
+        <el-table-column
+          v-for="k in Object.keys(d.display_rows[0])" :key="k"
+          :prop="k" :label="k" min-width="120"
+        />
+      </el-table>
+
+      <!-- 执行明细折叠（技术参数收拢） -->
+      <el-collapse class="rc-detail">
+        <el-collapse-item title="🔍 查看分析逻辑与 SQL 执行明细">
+          <div class="detail-line">来源表：<b>{{ tableLabel(d.table) }}</b>（{{ d.table }}）</div>
+          <div class="detail-line">执行模式：<b>{{ modeLabel(d.execution_mode) }}</b> · 数据行 {{ d.row_count ?? 0 }}</div>
+          <div class="rc-sql">{{ d.sql }}</div>
+        </el-collapse-item>
+      </el-collapse>
     </template>
 
     <div v-else class="rc-caveat">（暂无结构化渲染，请查看上方文本回答）</div>
@@ -138,6 +151,28 @@ const forest = computed(() =>
 
 const recs = computed(() => props.d?.recommendations?.recommendations ?? [])
 
+// query 核心大数字（无维度时用 display_rows[0]）
+const heroItems = computed(() => {
+  const row = props.d?.display_rows?.[0]
+  if (!props.d?.dimensions?.length && row) {
+    return Object.entries(row).map(([label, value]) => ({ label, value: String(value) }))
+  }
+  return []
+})
+
+const TABLE_LABEL: Record<string, string> = {
+  mart_order_delivery: '订单交付宽表',
+  mart_order_seller_delivery: '订单-卖家宽表',
+  mart_order_item_analysis: '商品项分析视图',
+}
+const MODE_LABEL: Record<string, string> = {
+  deterministic_query: '确定性查询',
+  react: '智能推理',
+  '确定': '确定性查询',
+}
+function tableLabel(t?: string) { return TABLE_LABEL[t ?? ''] ?? '—' }
+function modeLabel(m?: string) { return MODE_LABEL[m ?? ''] ?? m ?? '—' }
+
 function shortTerm(t: string) {
   if (t.includes('is_late_delivery')) return 'is_late_delivery'
   if (t.startsWith('C(')) return t.replace(/^C\((.*?)\)\[T\.(.*?)\]$/, '$1=$2').slice(0, 26)
@@ -157,6 +192,15 @@ function shortTerm(t: string) {
 .rc-title { font-size: 14px; font-weight: 600; margin: 14px 0 10px; color: var(--text-2); }
 .rc-conclusion { color: var(--text-1); font-size: 14px; line-height: 1.7; }
 .rc-error { background: var(--red-bg); color: var(--red); padding: 8px 12px; border-radius: var(--radius-sm); font-size: 12px; margin-bottom: 10px; }
+.query-hero { display: flex; gap: 14px; flex-wrap: wrap; margin-bottom: 12px; }
+.hero-item {
+  background: var(--bg); border-radius: var(--radius-md); padding: 14px 18px;
+  display: flex; flex-direction: column; gap: 4px; min-width: 120px;
+}
+.hero-label { font-size: 12px; color: var(--text-3); }
+.hero-value { font-size: 26px; font-weight: 700; color: var(--text-1); letter-spacing: -.5px; }
+.rc-detail { margin-top: 12px; border: 1px solid var(--border-soft); border-radius: var(--radius-md); overflow: hidden; }
+.detail-line { font-size: 12px; color: var(--text-2); margin-bottom: 6px; }
 .callout {
   display: flex; flex-direction: column; gap: 4px;
   background: #EFF6FF; border-left: 3px solid var(--primary);

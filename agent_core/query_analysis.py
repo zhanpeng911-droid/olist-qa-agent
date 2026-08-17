@@ -128,6 +128,20 @@ def plan_query_question(question: str, semantic: SemanticLayer) -> dict:
     ranking = bool(rank_match or any(word in question.lower() for word in ("top", "最高", "最多")))
     limit = int(rank_match.group(1)) if rank_match else (10 if ranking else 100)
     limit = min(max(limit, 1), 10000)
+
+    # 条件筛选：识别“延迟 X 天以上/以内”等数值范围 → WHERE late_days >=/<= X
+    filters: dict = {}
+    delay_ge = re.search(
+        r"延迟\s*(\d+)\s*天?\s*(?:以上|及以上|超过|大于|至少|超)|(?:>=|≥)\s*(\d+)\s*天",
+        question)
+    delay_le = re.search(
+        r"延迟\s*(\d+)\s*天?\s*(?:以内|之内|不超过|小于|最多)|(?:<=|≤)\s*(\d+)\s*天",
+        question)
+    if delay_ge:
+        filters["late_days"] = {"op": ">=", "value": int(delay_ge.group(1) or delay_ge.group(2))}
+    elif delay_le:
+        filters["late_days"] = {"op": "<=", "value": int(delay_le.group(1) or delay_le.group(2))}
+
     order_by = None
     if ranking and dimensions:
         if "低评分" in question or "低分" in question or "风险" in question:
@@ -142,6 +156,7 @@ def plan_query_question(question: str, semantic: SemanticLayer) -> dict:
         "table": table,
         "metrics": list(dict.fromkeys(metrics)),
         "dimensions": list(dict.fromkeys(dimensions)),
+        "filters": filters,
         "order_by": order_by,
         "limit": limit,
     }
@@ -176,6 +191,7 @@ def analyze_query_question(provider: DataProvider, semantic: SemanticLayer,
         table=plan["table"],
         metrics=plan["metrics"],
         dimensions=plan["dimensions"],
+        filters=plan.get("filters"),
         order_by=plan["order_by"],
         limit=plan["limit"],
     )
