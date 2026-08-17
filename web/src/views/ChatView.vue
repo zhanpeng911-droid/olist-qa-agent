@@ -1,7 +1,16 @@
 <template>
   <div class="chat">
     <div class="chat-body" ref="bodyEl">
-      <el-empty v-if="!messages.length" description="输入问题开始分析，例如：对低评分进行归因" />
+      <!-- 空状态：推荐提问胶囊 -->
+      <div v-if="!messages.length" class="empty">
+        <div class="empty-title">开始你的数据分析</div>
+        <div class="empty-sub">从这些问题开始，或直接输入你的问题</div>
+        <div class="chips">
+          <button v-for="c in prompts" :key="c" class="chip" @click="send(c)">
+            {{ c }}
+          </button>
+        </div>
+      </div>
 
       <div v-for="(m, i) in messages" :key="i" class="msg" :class="m.role">
         <div class="avatar" :class="m.role">{{ m.role === 'user' ? '我' : 'AI' }}</div>
@@ -23,20 +32,23 @@
       </div>
     </div>
 
+    <!-- 悬浮输入区 -->
     <div class="chat-input">
-      <el-input
-        v-model="input"
-        placeholder="例如：对低评分进行归因 / 延迟和评分是否相关 / 总体延迟率是多少"
-        size="large"
-        :disabled="sending"
-        @keyup.enter="send"
-      >
-        <template #append>
-          <el-button type="primary" :icon="Promotion" :loading="sending" @click="send" style="border-radius: 0 12px 12px 0">
-            发送
-          </el-button>
-        </template>
-      </el-input>
+      <div class="input-shell">
+        <el-input
+          v-model="input"
+          placeholder="输入你的问题，例如：对低评分进行归因"
+          size="large"
+          :disabled="sending"
+          class="chat-field"
+          @keyup.enter="send"
+        />
+        <button class="send-btn" :disabled="sending || !input.trim()" @click="send">
+          <el-icon v-if="!sending"><Promotion /></el-icon>
+          <span v-else class="spinner"></span>
+        </button>
+      </div>
+      <div class="input-hint">按 Enter 发送 · 支持归因、统计检验、指标查询等自然语言问题</div>
     </div>
   </div>
 </template>
@@ -52,37 +64,40 @@ const sending = ref(false)
 const messages = ref<any[]>([])
 const bodyEl = ref<HTMLDivElement>()
 
+const prompts = [
+  '📊 对低评分进行归因',
+  '📈 延迟和低评分是否相关',
+  '🔢 总体延迟率和低评分率是多少',
+  '🚚 延迟 15 天以上的订单表现如何',
+]
+
 const INTENT_LABEL: Record<string, string> = {
-  attribution: '归因分析',
-  statistical: '统计检验',
-  query: '指标查询',
-  deep_validation: '深度验证',
-  meta: '口径询问',
-  other: '智能对话',
+  attribution: '归因分析', statistical: '统计检验', query: '指标查询',
+  deep_validation: '深度验证', meta: '口径询问', other: '智能对话',
 }
 
 function intentLabel(i: string) { return INTENT_LABEL[i] ?? i }
 
-async function send() {
-  const q = input.value.trim()
-  if (!q || sending.value) return
+async function send(q?: string) {
+  const question = (q ?? input.value).trim()
+  if (!question || sending.value) return
   input.value = ''
   sending.value = true
-  messages.value.push({ role: 'user', text: q })
+  messages.value.push({ role: 'user', text: question })
   const ai: any = { role: 'assistant', steps: [], result: null, intent: '' }
   messages.value.push(ai)
   scrollBottom()
 
   await chatStream(
-    q,
+    question,
     (event, data) => {
-      if (event === 'intent') { ai.intent = data.intent }
-      else if (event === 'running') { ai.running = data.stage }
+      if (event === 'intent') ai.intent = data.intent
+      else if (event === 'running') ai.running = data.stage
       else if (event === 'result') { ai.result = data; ai.running = '' }
       else if (event === 'step') { ai.steps.push(data); scrollBottom() }
-      else if (event === 'answer') { ai.text = data.answer }
-      else if (event === 'warning') { ai.warning = data.message }
-      else if (event === 'error') { ai.error = `${data.error}` }
+      else if (event === 'answer') ai.text = data.answer
+      else if (event === 'warning') ai.warning = data.message
+      else if (event === 'error') ai.error = `${data.error}`
       scrollBottom()
     },
     () => { sending.value = false },
@@ -98,6 +113,21 @@ function scrollBottom() {
 <style scoped>
 .chat { display: flex; flex-direction: column; height: calc(100vh - 128px); }
 .chat-body { flex: 1; overflow-y: auto; padding-right: 8px; }
+
+/* 空状态 */
+.empty { height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; }
+.empty-title { font-size: 22px; font-weight: 700; color: var(--text-1); }
+.empty-sub { font-size: 13px; color: var(--text-3); margin-bottom: 18px; }
+.chips { display: flex; flex-wrap: wrap; gap: 12px; justify-content: center; max-width: 640px; }
+.chip {
+  border: 1px solid var(--border-soft); background: var(--card);
+  color: var(--text-2); font-size: 13px; font-weight: 500;
+  padding: 10px 18px; border-radius: var(--radius-pill);
+  cursor: pointer; transition: all .18s ease; box-shadow: var(--shadow);
+}
+.chip:hover { border-color: var(--primary); color: var(--primary); background: #EFF6FF; transform: translateY(-2px); }
+
+/* 消息 */
 .msg { display: flex; gap: 12px; margin-bottom: 22px; }
 .msg.user { flex-direction: row-reverse; }
 .avatar {
@@ -115,12 +145,39 @@ function scrollBottom() {
 .text { line-height: 1.7; font-size: 14px; white-space: pre-wrap; }
 .intent-tag {
   display: inline-block; font-size: 11px; color: var(--primary);
-  background: rgba(47,101,246,.08); padding: 2px 10px; border-radius: var(--radius-pill);
+  background: #EFF6FF; padding: 2px 10px; border-radius: var(--radius-pill);
   margin-bottom: 8px; font-weight: 600;
 }
 .running { color: var(--text-3); font-size: 12px; margin-bottom: 6px; }
 .error { color: var(--red); font-size: 13px; }
 .steps { margin-top: 10px; }
 .step { font-size: 11px; color: var(--text-3); line-height: 1.9; }
-.chat-input { margin-top: 18px; }
+
+/* 悬浮输入区 */
+.chat-input { margin-top: 14px; display: flex; flex-direction: column; align-items: center; gap: 8px; }
+.input-shell {
+  display: flex; align-items: center; gap: 10px;
+  width: min(760px, 100%);
+  background: var(--card); border-radius: var(--radius-pill);
+  padding: 8px 10px 8px 20px;
+  box-shadow: 0 10px 30px -8px rgba(47,101,246,.18), var(--shadow);
+  border: 1px solid var(--border-soft);
+  transition: box-shadow .2s ease, border-color .2s ease;
+}
+.input-shell:focus-within { border-color: var(--primary); box-shadow: 0 14px 34px -8px rgba(47,101,246,.28); }
+.chat-field :deep(.el-input__wrapper) { box-shadow: none !important; background: transparent; padding: 0; }
+.send-btn {
+  width: 42px; height: 42px; border-radius: 50%; border: none; cursor: pointer;
+  background: linear-gradient(135deg, var(--primary), var(--accent));
+  color: #fff; display: flex; align-items: center; justify-content: center;
+  font-size: 18px; flex-shrink: 0; transition: opacity .2s ease;
+  box-shadow: 0 6px 14px -4px rgba(47,101,246,.5);
+}
+.send-btn:disabled { opacity: .45; cursor: not-allowed; }
+.spinner {
+  width: 16px; height: 16px; border: 2px solid rgba(255,255,255,.4);
+  border-top-color: #fff; border-radius: 50%; animation: spin .7s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+.input-hint { font-size: 11px; color: var(--text-3); }
 </style>

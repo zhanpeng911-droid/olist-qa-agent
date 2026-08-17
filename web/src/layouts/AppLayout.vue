@@ -35,12 +35,12 @@
           <h1>{{ route.meta.title || '总览' }}</h1>
         </div>
         <div class="topbar-right">
-          <el-select v-model="period" size="default" class="period">
+          <el-select v-if="route.path === '/dashboard'" v-model="period" class="period">
             <el-option label="近 30 天" value="month" />
             <el-option label="近 90 天" value="quarter" />
             <el-option label="全年" value="year" />
           </el-select>
-          <el-button circle class="icon-btn" :icon="Bell" />
+          <button class="icon-btn" aria-label="通知"><el-icon :size="18"><Bell /></el-icon></button>
           <div class="user">
             <div class="avatar">企</div>
             <div class="user-text">
@@ -59,7 +59,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { onMounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import { Bell } from '@element-plus/icons-vue'
 import { getMeta } from '../api'
@@ -118,15 +118,17 @@ onMounted(async () => {
   color: var(--text-2); text-decoration: none;
   font-size: 14px; font-weight: 500;
   position: relative; transition: all .18s ease;
+  border: none; outline: none;
 }
 .nav-item:hover { background: rgba(47,101,246,.05); color: var(--text-1); }
+/* 统一选中态：浅蓝背景 + 蓝字 + 左侧 3px 高亮条 */
 .nav-item.active {
-  background: rgba(47,101,246,.08);
-  color: var(--primary); font-weight: 600;
+  background: #EFF6FF;
+  color: #2563EB; font-weight: 600;
 }
 .nav-item.active::before {
   content: ''; position: absolute; left: -16px; top: 8px; bottom: 8px;
-  width: 3px; border-radius: 3px; background: var(--primary);
+  width: 3px; border-radius: 3px; background: #2F65F6;
 }
 .nav-icon { font-size: 16px; }
 
@@ -141,22 +143,34 @@ onMounted(async () => {
 /* 主区 */
 .main { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
 .topbar {
-  height: 72px; padding: 0 32px;
+  height: 72px; padding: 0 24px 0 32px;
   display: flex; align-items: center; justify-content: space-between;
   background: var(--card); border-bottom: 1px solid var(--border-soft);
+  flex-shrink: 0;
 }
-.topbar h1 { font-size: 20px; font-weight: 700; margin: 0; }
-.topbar-right { display: flex; align-items: center; gap: 16px; }
-.icon-btn { border: none; background: var(--bg); }
-.user { display: flex; align-items: center; gap: 10px; }
+.topbar h1 { font-size: 20px; font-weight: 700; margin: 0; white-space: nowrap; }
+.topbar-right {
+  display: flex; align-items: center; gap: 18px;
+  min-width: 0;
+}
+.period { width: 120px; flex-shrink: 0; }
+.icon-btn {
+  border: none; background: var(--bg); cursor: pointer;
+  width: 38px; height: 38px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  color: var(--text-2); flex-shrink: 0;
+}
+.icon-btn:hover { background: #EFF6FF; color: var(--primary); }
+.user { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
 .avatar {
   width: 38px; height: 38px; border-radius: 50%;
   background: linear-gradient(135deg, var(--sky), var(--primary));
   color: #fff; display: flex; align-items: center; justify-content: center;
-  font-weight: 600;
+  font-weight: 600; flex-shrink: 0;
 }
-.user-name { font-size: 14px; font-weight: 600; }
-.user-hello { font-size: 11px; color: var(--text-3); }
+.user-text { white-space: nowrap; text-align: left; }
+.user-name { font-size: 14px; font-weight: 600; line-height: 1.2; }
+.user-hello { font-size: 11px; color: var(--text-3); line-height: 1.3; }
 
 .content { flex: 1; overflow-y: auto; padding: 28px 32px; }
 </style>

@@ -33,6 +33,16 @@
   --font: 'Inter', 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont,
           'PingFang SC', 'Microsoft YaHei', sans-serif;
   --pad: 24px;
+
+  /* Element Plus 主题覆盖 → 品牌蓝 */
+  --el-color-primary: #2F65F6;
+  --el-color-primary-light-3: #5B85F8;
+  --el-color-primary-light-5: #86A4FA;
+  --el-color-primary-light-7: #B0C4FC;
+  --el-color-primary-light-8: #C5D4FD;
+  --el-color-primary-light-9: #DBE5FE;
+  --el-color-primary-dark-2: #2551C5;
+  --el-border-radius-base: 10px;
 }
 
 * { box-sizing: border-box; }
