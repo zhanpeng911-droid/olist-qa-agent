@@ -22,15 +22,16 @@ export function areaOption(x: string[], y: number[], name = ''): any {
   }
 }
 
-/** 横向条形图（排名） */
+/** 横向条形图（排名），右侧带百分比标签 */
 export function barOption(labels: string[], values: number[], name = ''): any {
   return {
     tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' }, backgroundColor: '#1E293B', textStyle: { color: '#fff' } },
-    grid: { left: 90, right: 30, top: 12, bottom: 24 },
+    grid: { left: 90, right: 52, top: 12, bottom: 24 },
     xAxis: { type: 'value', axisLabel: { color: '#94A3B8', formatter: '{value}%' }, splitLine: { lineStyle: { color: '#F1F5F9' } } },
     yAxis: { type: 'category', data: labels, axisLabel: { color: '#64748B' }, axisLine: { show: false }, axisTick: { show: false } },
     series: [{
       name, type: 'bar', barWidth: 16, data: values.map(v => +(v * 100).toFixed(1)),
+      label: { show: true, position: 'right', color: '#64748B', fontSize: 12, fontWeight: 600, formatter: '{c}%' },
       itemStyle: {
         borderRadius: [0, 8, 8, 0],
         color: new echarts.graphic.LinearGradient(0, 0, 1, 0, [{ offset: 0, color: '#38BDF8' }, { offset: 1, color: '#2F65F6' }]),
@@ -39,11 +40,17 @@ export function barOption(labels: string[], values: number[], name = ''): any {
   }
 }
 
-/** 环形图 */
-export function donutOption(labels: string[], values: number[]): any {
+/** 环形图：中心核心数字 + 业务中文图例 */
+export function donutOption(labels: string[], values: number[], centerText?: string): any {
   return {
-    tooltip: { trigger: 'item', backgroundColor: '#1E293B', textStyle: { color: '#fff' } },
-    legend: { bottom: 0, textStyle: { color: '#64748B' } },
+    tooltip: { trigger: 'item', backgroundColor: '#1E293B', textStyle: { color: '#fff' }, formatter: '{b}: {c}%' },
+    legend: { bottom: 0, textStyle: { color: '#64748B', fontSize: 12 }, itemWidth: 10, itemHeight: 10 },
+    graphic: centerText
+      ? [
+          { type: 'text', left: 'center', top: '38%', style: { text: centerText, textAlign: 'center', fill: '#0F172A', fontSize: 26, fontWeight: 700 } },
+          { type: 'text', left: 'center', top: '52%', style: { text: '有效样本', textAlign: 'center', fill: '#94A3B8', fontSize: 11 } },
+        ]
+      : [],
     series: [{
       type: 'pie', radius: ['58%', '78%'], center: ['50%', '45%'],
       avoidLabelOverlap: true, itemStyle: { borderRadius: 6, borderColor: '#fff', borderWidth: 3 },
@@ -87,15 +94,32 @@ export function forestOption(terms: any[], title = '调整后 OR (95% CI)'): any
   }
 }
 
-/** 迷你走势线（KPI sparkline） */
+/** 迷你走势线（KPI sparkline）：简单折线 + 渐变面积，避免平滑曲线起点异常 */
 export function sparklineOption(values: number[], color = '#2F65F6'): any {
   return {
-    grid: { left: 2, right: 2, top: 4, bottom: 2 },
-    xAxis: { type: 'category', show: false, data: values.map((_, i) => i) },
-    yAxis: { type: 'value', show: false, min: 'dataMin', max: 'dataMax' },
+    grid: { left: 2, right: 2, top: 6, bottom: 2 },
+    xAxis: { type: 'category', show: false, boundaryGap: false, data: values.map((_, i) => i) },
+    yAxis: { type: 'value', show: false, scale: true },
     series: [{
-      type: 'line', smooth: true, symbol: 'none', data: values,
-      lineStyle: { width: 2, color }, areaStyle: { color: 'rgba(47,101,246,.08)' },
+      type: 'line', smooth: false, symbol: 'none', data: values,
+      lineStyle: { width: 2, color }, areaStyle: {
+        color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+          { offset: 0, color: 'rgba(47,101,246,.16)' }, { offset: 1, color: 'rgba(47,101,246,0)' },
+        ]),
+      },
+    }],
+  }
+}
+
+/** 无数据走势：水平淡灰虚线基准线（保持 KPI 卡片视觉体量一致） */
+export function flatLineOption(color = '#CBD5E1'): any {
+  return {
+    grid: { left: 2, right: 2, top: 6, bottom: 2 },
+    xAxis: { type: 'category', show: false, data: [0, 1, 2, 3, 4, 5, 6] },
+    yAxis: { type: 'value', show: false },
+    series: [{
+      type: 'line', symbol: 'none', data: [0, 0, 0, 0, 0, 0, 0],
+      lineStyle: { width: 1.5, color, type: 'dashed' },
     }],
   }
 }

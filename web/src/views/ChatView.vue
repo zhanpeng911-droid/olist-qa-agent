@@ -1,13 +1,15 @@
 <template>
   <div class="chat">
     <div class="chat-body" ref="bodyEl">
-      <!-- 空状态：推荐提问胶囊 -->
+      <!-- 空状态：场景化提问矩阵 -->
       <div v-if="!messages.length" class="empty">
         <div class="empty-title">开始你的数据分析</div>
-        <div class="empty-sub">从这些问题开始，或直接输入你的问题</div>
-        <div class="chips">
-          <button v-for="c in prompts" :key="c" class="chip" @click="send(c)">
-            {{ c }}
+        <div class="empty-sub">选择下面的场景开始，或直接输入你的问题</div>
+        <div class="prompt-grid">
+          <button v-for="p in prompts" :key="p.prompt" class="prompt-card" @click="send(p.prompt)">
+            <div class="prompt-icon">{{ p.icon }}</div>
+            <div class="prompt-title">{{ p.title }}</div>
+            <div class="prompt-desc">{{ p.desc }}</div>
           </button>
         </div>
       </div>
@@ -35,6 +37,7 @@
     <!-- 悬浮输入区 -->
     <div class="chat-input">
       <div class="input-shell">
+        <span class="src-tag">📎 Olist 数据</span>
         <el-input
           v-model="input"
           placeholder="输入你的问题，例如：对低评分进行归因"
@@ -43,6 +46,9 @@
           class="chat-field"
           @keyup.enter="send"
         />
+        <button v-if="messages.length && !sending" class="clear-btn" title="清空上下文" @click="clear">
+          <el-icon><Delete /></el-icon>
+        </button>
         <button class="send-btn" :disabled="sending || !input.trim()" @click="send">
           <el-icon v-if="!sending"><Promotion /></el-icon>
           <span v-else class="spinner"></span>
@@ -55,7 +61,7 @@
 
 <script setup lang="ts">
 import { nextTick, ref } from 'vue'
-import { Promotion } from '@element-plus/icons-vue'
+import { Delete, Promotion } from '@element-plus/icons-vue'
 import { chatStream } from '../api'
 import ResultCard from '../components/cards/ResultCard.vue'
 
@@ -65,11 +71,13 @@ const messages = ref<any[]>([])
 const bodyEl = ref<HTMLDivElement>()
 
 const prompts = [
-  '📊 对低评分进行归因',
-  '📈 延迟和低评分是否相关',
-  '🔢 总体延迟率和低评分率是多少',
-  '🚚 延迟 15 天以上的订单表现如何',
+  { icon: '🔍', title: '归因分析', desc: '对低评分进行归因', prompt: '对低评分进行归因' },
+  { icon: '📈', title: '相关性探索', desc: '延迟和低评分是否相关？', prompt: '延迟和低评分是否相关' },
+  { icon: '📊', title: '核心指标查询', desc: '总体延迟率和低评分率对比', prompt: '总体延迟率和低评分率是多少' },
+  { icon: '🚚', title: '异常排查', desc: '延迟 15 天以上的订单表现', prompt: '延迟 15 天以上的订单低评分率是多少' },
 ]
+
+function clear() { messages.value = []; input.value = '' }
 
 const INTENT_LABEL: Record<string, string> = {
   attribution: '归因分析', statistical: '统计检验', query: '指标查询',
@@ -114,18 +122,25 @@ function scrollBottom() {
 .chat { display: flex; flex-direction: column; height: calc(100vh - 128px); }
 .chat-body { flex: 1; overflow-y: auto; padding-right: 8px; }
 
-/* 空状态 */
+/* 空状态：场景化提问矩阵 */
 .empty { height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; }
 .empty-title { font-size: 22px; font-weight: 700; color: var(--text-1); }
-.empty-sub { font-size: 13px; color: var(--text-3); margin-bottom: 18px; }
-.chips { display: flex; flex-wrap: wrap; gap: 12px; justify-content: center; max-width: 640px; }
-.chip {
-  border: 1px solid var(--border-soft); background: var(--card);
-  color: var(--text-2); font-size: 13px; font-weight: 500;
-  padding: 10px 18px; border-radius: var(--radius-pill);
-  cursor: pointer; transition: all .18s ease; box-shadow: var(--shadow);
+.empty-sub { font-size: 13px; color: var(--text-3); margin-bottom: 20px; }
+.prompt-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; max-width: 560px; width: 100%; }
+.prompt-card {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 6px;
+  padding: 18px 20px; text-align: left;
+  background: var(--card); border: 1px solid var(--border-soft);
+  border-radius: var(--radius-lg); box-shadow: var(--shadow);
+  cursor: pointer; transition: all .2s ease;
 }
-.chip:hover { border-color: var(--primary); color: var(--primary); background: #EFF6FF; transform: translateY(-2px); }
+.prompt-card:hover {
+  transform: translateY(-3px); border-color: var(--primary);
+  box-shadow: 0 16px 34px -10px rgba(47,101,246,.22);
+}
+.prompt-icon { font-size: 22px; }
+.prompt-title { font-size: 15px; font-weight: 700; color: var(--text-1); }
+.prompt-desc { font-size: 12px; color: var(--text-3); }
 
 /* 消息 */
 .msg { display: flex; gap: 12px; margin-bottom: 22px; }
@@ -159,20 +174,33 @@ function scrollBottom() {
   display: flex; align-items: center; gap: 10px;
   width: min(760px, 100%);
   background: var(--card); border-radius: var(--radius-pill);
-  padding: 8px 10px 8px 20px;
-  box-shadow: 0 10px 30px -8px rgba(47,101,246,.18), var(--shadow);
+  padding: 8px 10px 8px 18px;
+  box-shadow: 0 12px 32px -4px rgba(15, 23, 42, 0.08), 0 6px 18px -6px rgba(47, 101, 246, 0.12);
   border: 1px solid var(--border-soft);
   transition: box-shadow .2s ease, border-color .2s ease;
 }
-.input-shell:focus-within { border-color: var(--primary); box-shadow: 0 14px 34px -8px rgba(47,101,246,.28); }
+.input-shell:focus-within { border-color: var(--primary); box-shadow: 0 14px 34px -8px rgba(47, 101, 246, 0.26); }
+.src-tag {
+  font-size: 11px; color: var(--text-2); background: var(--bg);
+  padding: 4px 10px; border-radius: var(--radius-pill);
+  white-space: nowrap; flex-shrink: 0;
+}
 .chat-field :deep(.el-input__wrapper) { box-shadow: none !important; background: transparent; padding: 0; }
+.clear-btn {
+  width: 34px; height: 34px; border-radius: 50%; border: none; cursor: pointer;
+  background: var(--bg); color: var(--text-3); flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+}
+.clear-btn:hover { color: var(--red); background: var(--red-bg); }
 .send-btn {
   width: 42px; height: 42px; border-radius: 50%; border: none; cursor: pointer;
-  background: linear-gradient(135deg, var(--primary), var(--accent));
+  background: linear-gradient(135deg, #2563EB, var(--primary));
   color: #fff; display: flex; align-items: center; justify-content: center;
-  font-size: 18px; flex-shrink: 0; transition: opacity .2s ease;
-  box-shadow: 0 6px 14px -4px rgba(47,101,246,.5);
+  font-size: 18px; flex-shrink: 0; transition: all .2s ease;
+  box-shadow: 0 6px 14px -4px rgba(47, 101, 246, 0.5);
 }
+.send-btn:hover:not(:disabled) { transform: scale(1.05); }
+.send-btn:active:not(:disabled) { transform: scale(.96); }
 .send-btn:disabled { opacity: .45; cursor: not-allowed; }
 .spinner {
   width: 16px; height: 16px; border: 2px solid rgba(255,255,255,.4);

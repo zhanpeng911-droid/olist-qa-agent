@@ -20,12 +20,12 @@
         <div class="s-card kpi hoverable" v-for="k in kpis" :key="k.label">
           <div class="kpi-top">
             <span class="kpi-label">{{ k.label }}</span>
-            <span class="pill" :class="k.pillClass">{{ k.pillText }}</span>
+            <span class="pill flat">{{ k.pillText }}</span>
           </div>
           <div class="kpi-value">{{ k.value }}</div>
           <div class="kpi-spark">
             <BaseChart v-if="k.spark && k.spark.length > 1" :option="spark(k.spark)" height="34px" />
-            <span v-else class="no-spark">暂无走势数据</span>
+            <BaseChart v-else :option="flatLine()" height="34px" />
           </div>
         </div>
       </div>
@@ -43,22 +43,29 @@
           <el-empty v-else description="样本不足，无支付方式分组" :image-size="60" />
         </div>
         <div class="s-card chart-card wide">
-          <h3 class="s-title">延迟分档 · 低评分率</h3>
-          <BaseChart v-if="delayArea" :option="delayArea" height="260px" />
-          <el-empty v-else description="1000 行样本下多数延迟档位未达样本门槛，全量数据可完整展示" :image-size="70" />
+          <h3 class="s-title">低评分率 · 月度趋势</h3>
+          <BaseChart v-if="trendArea" :option="trendArea" height="240px" />
+          <el-empty v-else description="暂无月度趋势数据" :image-size="60" />
         </div>
       </div>
 
-      <p class="data-note">数据来源：低评分关联因素分析（{{ sourceLabel }}）· 口径：低评分 = 评分 ≤ 3，有效样本 = {{ baseSample }} 单</p>
+      <!-- 数据缺口提示条（不占大卡） -->
+      <div v-if="notices.length" class="notice-bar">
+        <el-icon><InfoFilled /></el-icon>
+        <span v-for="n in notices" :key="n">{{ n }}</span>
+      </div>
+
+      <p class="data-note">数据来源：低评分关联因素分析（{{ sourceLabel }}）· 口径：低评分 = 评分 ≤ 3 · 有效样本 {{ baseSample }} 单</p>
     </template>
   </div>
 </template>
 
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
+import { InfoFilled } from '@element-plus/icons-vue'
 import BaseChart from '../components/charts/BaseChart.vue'
 import { runAttribution, runQuery, getMeta } from '../api'
-import { areaOption, barOption, donutOption, sparklineOption as spark } from '../charts'
+import { areaOption, barOption, donutOption, sparklineOption as spark, flatLineOption as flatLine } from '../charts'
 
 const loading = ref(true)
 const error = ref('')
@@ -66,18 +73,27 @@ const attr = ref<any>(null)
 const meta = ref<any>(null)
 const lateRate = ref<number | null>(null)
 const avgScore = ref<number | null>(null)
-const trend = ref<any[]>([])   // 月度低评分率趋势（真实 sparkline）
-
-const sparklineOption = spark
+const trend = ref<any[]>([])
 
 const sourceLabel = computed(() => meta.value?.source_label ?? '演示样本')
 const baseSample = computed(() => attr.value?.baseline?.order?.sample ?? 0)
 
-// factors 才是按维度分组的数据（priorities 只有 Top 3）
 const orderFactors = computed(() => attr.value?.factors?.order ?? [] as any[])
 function groupsOf(dim: string) {
   return orderFactors.value.filter((g: any) => g.dimension === dim)
 }
+
+// 数据缺口提示（1000 行样本下被门槛过滤的维度）
+const notices = computed(() => {
+  const list: string[] = []
+  if (!groupsOf('delay_bucket').some((g: any) => g.value !== '按时')) {
+    list.push('延迟分档：除“按时”外其余档位未达样本门槛(100)，全量数据可完整展示')
+  }
+  if (!groupsOf('primary_category_name').length) {
+    list.push('品类分组：未达样本门槛(100)，未展示')
+  }
+  return list
+})
 
 const kpis = computed(() => {
   const base = attr.value?.baseline?.order
@@ -85,23 +101,21 @@ const kpis = computed(() => {
   return [
     {
       label: '低评分率', value: fmtPct(lowRate),
-      pillText: `基准 ${fmtPct(lowRate)}`, pillClass: 'flat',
+      pillText: `样本 ${base?.sample ?? 0}`,
       spark: trend.value.map((r: any) => r._m_low_score_rate),
     },
     {
       label: '延迟率', value: lateRate.value == null ? '—' : fmtPct(lateRate.value),
-      pillText: lateRate.value == null ? '待全量数据' : '近 30 天',
-      pillClass: lateRate.value == null ? 'flat' : 'up',
+      pillText: lateRate.value == null ? '待全量数据' : '全量',
       spark: [],
     },
     {
       label: '有效样本', value: base?.sample ?? 0,
-      pillText: '订单级', pillClass: 'flat', spark: [],
+      pillText: '订单级', spark: [],
     },
     {
       label: '平均评分', value: avgScore.value?.toFixed(2) ?? '—',
-      pillText: avgScore.value == null ? '待查询' : 'review',
-      pillClass: 'flat', spark: [],
+      pillText: '5 分制', spark: [],
     },
   ]
 })
@@ -112,20 +126,25 @@ const stateBar = computed(() => {
   return barOption(gs.map((g: any) => g.value), gs.map((g: any) => g.low_score_rate), '低评分率')
 })
 
+const PAY_LABEL: Record<string, string> = {
+  credit_card: '信用卡支付', boleto: 'Boleto 现金券', voucher: '代金券',
+  debit_card: '借记卡', not_defined: '未定义',
+}
+
 const payDonut = computed(() => {
   const gs = groupsOf('primary_payment_type').slice(0, 6)
   if (!gs.length) return null
-  return donutOption(gs.map((g: any) => g.value), gs.map((g: any) => g.low_score_rate * 100))
+  return donutOption(
+    gs.map((g: any) => `${PAY_LABEL[g.value] ?? g.value} (${(g.low_score_rate * 100).toFixed(0)}%)`),
+    gs.map((g: any) => g.low_score_rate * 100),
+    String(baseSample.value),
+  )
 })
 
-const delayArea = computed(() => {
-  const gs = groupsOf('delay_bucket')
-  if (gs.length < 2) return null
-  const order = ['按时', '1-3天', '4-7天', '8-14天', '15天+']
-  const by = new Map(gs.map((g: any) => [g.value, g.low_score_rate]))
-  const labels = order.filter(x => by.has(x))
-  const values = labels.map(x => by.get(x)!)
-  return areaOption(labels, values, '低评分率')
+const trendArea = computed(() => {
+  const rows = trend.value.slice().sort((a: any, b: any) => (a.order_month < b.order_month ? -1 : 1))
+  if (rows.length < 2) return null
+  return areaOption(rows.map((r: any) => r.order_month), rows.map((r: any) => r._m_low_score_rate), '低评分率')
 })
 
 function fmtPct(v: number | undefined | null) {
@@ -137,7 +156,6 @@ onMounted(async () => {
     const [a, m] = await Promise.all([runAttribution('对低评分进行归因'), getMeta()])
     attr.value = a
     meta.value = m
-    // 延迟率 / 平均评分 / 月度趋势（真实数据）
     const [lr, sc, tr] = await Promise.all([
       runQuery('总体延迟率是多少'),
       runQuery('平均评分是多少'),
@@ -163,9 +181,15 @@ onMounted(async () => {
 .kpi-top { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
 .kpi-label { font-size: 13px; color: var(--text-2); font-weight: 500; }
 .kpi-value { font-size: 30px; font-weight: 700; color: var(--text-1); margin-bottom: 4px; letter-spacing: -.5px; }
-.kpi-spark { height: 34px; display: flex; align-items: flex-end; }
-.no-spark { font-size: 12px; color: var(--text-3); }
+.kpi-spark { height: 34px; }
 .chart-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
 .chart-card.wide { grid-column: 1 / -1; }
-.data-note { margin-top: 16px; font-size: 12px; color: var(--text-3); text-align: center; }
+.notice-bar {
+  display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+  margin-top: 20px; padding: 10px 16px;
+  background: rgba(47,101,246,.05); border-radius: var(--radius-md);
+  color: var(--text-2); font-size: 12px;
+}
+.notice-bar .el-icon { color: var(--primary); }
+.data-note { margin-top: 14px; font-size: 12px; color: var(--text-3); text-align: center; }
 </style>

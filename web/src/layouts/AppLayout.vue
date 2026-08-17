@@ -24,7 +24,12 @@
       </div>
 
       <div class="sidebar-footer">
-        <span class="dot"></span> 数据源：{{ meta?.source_label || '…' }}
+        <div class="footer-head">
+          <span class="dot"></span>
+          <span class="footer-status">数据源已连接</span>
+        </div>
+        <div class="footer-src">{{ sourceLabel }}</div>
+        <div class="footer-note">只读分析 · 口径锁死 · 可对账</div>
       </div>
     </aside>
 
@@ -59,7 +64,7 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import { Bell } from '@element-plus/icons-vue'
 import { getMeta } from '../api'
@@ -67,6 +72,8 @@ import { getMeta } from '../api'
 const route = useRoute()
 const period = ref('month')
 const meta = ref<any>(null)
+
+const sourceLabel = computed(() => meta.value?.source_label ?? '加载中…')
 
 const groups = [
   {
@@ -133,17 +140,20 @@ onMounted(async () => {
 .nav-icon { font-size: 16px; }
 
 .sidebar-footer {
-  margin-top: auto; padding: 12px;
-  font-size: 12px; color: var(--text-3);
+  margin-top: auto; padding: 14px;
   background: var(--bg); border-radius: var(--radius-md);
-  display: flex; align-items: center; gap: 8px;
+  border: 1px solid var(--border-soft);
 }
-.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--green); }
+.footer-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--green); box-shadow: 0 0 0 3px rgba(16,185,129,.15); }
+.footer-status { font-size: 12px; color: var(--text-2); font-weight: 600; }
+.footer-src { font-size: 13px; color: var(--text-1); font-weight: 700; margin-bottom: 4px; word-break: break-all; }
+.footer-note { font-size: 11px; color: var(--text-3); }
 
 /* 主区 */
 .main { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
 .topbar {
-  height: 72px; padding: 0 24px 0 32px;
+  height: 72px; padding: 0 28px 0 32px;
   display: flex; align-items: center; justify-content: space-between;
   background: var(--card); border-bottom: 1px solid var(--border-soft);
   flex-shrink: 0;
