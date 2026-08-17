@@ -132,8 +132,17 @@ function loadCurrent() {
   scrollBottom()
 }
 
-// 侧边栏切换会话时同步
+// 侧边栏切换会话时同步（currentId 变化）
 watch(currentId, () => { loadCurrent() })
+// 路由 session 参数变化（侧边栏点击 → ?session=id）也触发加载（双保险）
+watch(() => route.query.session, (sid) => {
+  if (sid && sid !== currentId.value) {
+    switchSession(String(sid))
+    loadCurrent()
+  } else if (sid && sid === currentId.value) {
+    loadCurrent()
+  }
+})
 
 // ---------- 预设 ----------
 const prompts = [

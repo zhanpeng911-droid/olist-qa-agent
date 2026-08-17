@@ -41,6 +41,7 @@
           >
             <MessageSquare :size="14" :stroke-width="1.8" class="si-ico" />
             <span class="si-title" :title="s.title">{{ s.title }}</span>
+            <span v-if="s.messages?.length" class="si-count">{{ s.messages.length }}</span>
             <button class="si-del" title="删除会话" @click.stop="remove(s.id)">
               <Trash2 :size="13" />
             </button>
@@ -220,6 +221,7 @@ onMounted(async () => {
 }
 .session-item:hover .si-del { display: inline-flex; }
 .si-del:hover { color: var(--red); background: var(--red-bg); }
+.si-count { font-size: 10px; color: var(--text-3); background: var(--bg); padding: 0 6px; border-radius: 8px; flex-shrink: 0; }
 
 .sidebar-footer {
   margin-top: auto; padding: 14px;
