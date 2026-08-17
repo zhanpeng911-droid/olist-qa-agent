@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 from pathlib import Path
 from typing import AsyncGenerator
@@ -55,17 +56,29 @@ def get_provider():
     return ProjectCsvProvider()
 
 
-def _default(o):
-    """把 numpy / datetime 等序列化为 JSON 可表达类型。"""
-    if hasattr(o, "item"):
-        return o.item()
-    if hasattr(o, "isoformat"):
-        return o.isoformat()
-    return str(o)
+def _clean(obj):
+    """递归把 numpy 标量 / datetime / 非有限浮点（inf/nan）转为 JSON 可表达类型。
+
+    注意：json.dumps 的 default 回调不会处理 inf（inf 是合法 float，dumps 直接抛错），
+    因此必须在序列化前递归清理。
+    """
+    if hasattr(obj, "item"):          # numpy 标量 → Python 标量
+        obj = obj.item()
+    if isinstance(obj, float):
+        return obj if math.isfinite(obj) else None   # inf/nan → null
+    if isinstance(obj, dict):
+        return {k: _clean(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_clean(v) for v in obj]
+    if isinstance(obj, (int, bool)) or obj is None:
+        return obj
+    if hasattr(obj, "isoformat"):
+        return obj.isoformat()
+    return str(obj)
 
 
 def _json(res: dict) -> JSONResponse:
-    return JSONResponse(content=json.loads(json.dumps(res, default=_default)))
+    return JSONResponse(content=_clean(res))
 
 
 class QuestionBody(BaseModel):
@@ -136,7 +149,8 @@ def api_meta():
 
 # ---------- SSE 流式对话 ----------
 def _sse(event: str, data) -> str:
-    return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False, default=_default)}\n\n"
+    payload = json.dumps(_clean(data), ensure_ascii=False)
+    return f"event: {event}\ndata: {payload}\n\n"
 
 
 @app.post("/api/chat")
