@@ -44,7 +44,7 @@ app.add_middleware(
 
 # ---------- 归因结果缓存（全量统计耗时长，缓存避免重复计算） ----------
 _ATTR_CACHE: dict[str, tuple[float, dict]] = {}
-_ATTR_CACHE_TTL = 300          # 5 分钟
+_ATTR_CACHE_TTL = 86400         # 24 小时（全量数据静态，缓存长期有效；数据更新重启服务即刷新）
 
 
 def _cached_attribution(question: str) -> dict:

@@ -1,5 +1,6 @@
 <template>
   <div class="result-card">
+    <div v-if="renderError" class="rc-error">⚠ 结果渲染出错：{{ renderError }}</div>
     <!-- 归因结果 -->
     <template v-if="intent === 'attribution'">
       <div class="rc-row">
@@ -108,12 +109,19 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, onErrorCaptured, ref } from 'vue'
 import BaseChart from '../charts/BaseChart.vue'
 import { forestOption } from '../../charts'
 import { fmtNum, fmtP } from '../../format'
 
 const props = defineProps<{ intent: string; d: any }>()
+
+// 子组件渲染错误局部显示，避免整页白屏
+const renderError = ref('')
+onErrorCaptured((err) => {
+  renderError.value = String((err as any)?.message ?? err)
+  return false
+})
 
 function fmtPct(v: number | undefined) {
   return v == null ? '—' : (v * 100).toFixed(1) + '%'
@@ -148,6 +156,7 @@ function shortTerm(t: string) {
 .rc-metric b { font-size: 18px; font-weight: 700; color: var(--text-1); }
 .rc-title { font-size: 14px; font-weight: 600; margin: 14px 0 10px; color: var(--text-2); }
 .rc-conclusion { color: var(--text-1); font-size: 14px; line-height: 1.7; }
+.rc-error { background: var(--red-bg); color: var(--red); padding: 8px 12px; border-radius: var(--radius-sm); font-size: 12px; margin-bottom: 10px; }
 .callout {
   display: flex; flex-direction: column; gap: 4px;
   background: #EFF6FF; border-left: 3px solid var(--primary);

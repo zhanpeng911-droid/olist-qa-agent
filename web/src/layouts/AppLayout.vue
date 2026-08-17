@@ -40,11 +40,7 @@
           <h1>{{ route.meta.title || '总览' }}</h1>
         </div>
         <div class="topbar-right">
-          <el-select v-if="route.path === '/dashboard'" v-model="period" class="period">
-            <el-option label="近 30 天" value="month" />
-            <el-option label="近 90 天" value="quarter" />
-            <el-option label="全年" value="year" />
-          </el-select>
+          <span v-if="route.path === '/dashboard'" class="range-tag">📅 全量数据 · 2016-09 ~ 2018-10</span>
           <button class="icon-btn" aria-label="通知"><el-icon :size="18"><Bell /></el-icon></button>
           <div class="user">
             <div class="avatar">企</div>
@@ -70,7 +66,6 @@ import { Bell } from '@element-plus/icons-vue'
 import { getMeta } from '../api'
 
 const route = useRoute()
-const period = ref('month')
 const meta = ref<any>(null)
 
 const sourceLabel = computed(() => meta.value?.source_label ?? '加载中…')
@@ -164,6 +159,11 @@ onMounted(async () => {
   min-width: 0;
 }
 .period { width: 120px; flex-shrink: 0; }
+.range-tag {
+  font-size: 12px; color: var(--text-2); background: var(--bg);
+  padding: 6px 12px; border-radius: var(--radius-pill);
+  white-space: nowrap;
+}
 .icon-btn {
   border: none; background: var(--bg); cursor: pointer;
   width: 38px; height: 38px; border-radius: 50%;
