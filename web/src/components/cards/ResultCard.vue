@@ -12,7 +12,7 @@
       </div>
 
       <div v-if="summary" class="callout">
-        <span class="callout-label">💡 核心洞察</span>
+        <span class="callout-label"><Lightbulb :size="13" /> 核心洞察</span>
         <span class="callout-text">{{ summary }}</span>
       </div>
 
@@ -54,7 +54,7 @@
         <div class="rc-metric"><span>显著</span><b>{{ d.significant ? '是' : '否' }}</b></div>
       </div>
       <div v-if="d.conclusion" class="callout">
-        <span class="callout-label">💡 核心结论</span>
+        <span class="callout-label"><Lightbulb :size="13" /> 核心结论</span>
         <span class="callout-text">{{ d.conclusion }}</span>
       </div>
       <p v-if="d.method_reason" class="rc-caveat">{{ d.method_reason }}</p>
@@ -67,7 +67,7 @@
     <!-- ============ 查询结果 ============ -->
     <template v-else-if="intent === 'query'">
       <div v-if="!heroItems.length && !hasTable" class="query-empty">
-        <span class="qe-icon">💡</span>
+        <Lightbulb :size="16" class="qe-icon" />
         {{ d.error || '未识别到明确的指标，试试：「总体低评分率是多少」或「各客户州的低评分率对比」' }}
       </div>
 
@@ -81,7 +81,7 @@
 
       <!-- 洞察摘要 -->
       <div v-if="summary" class="callout">
-        <span class="callout-label">💡 核心洞察</span>
+        <span class="callout-label"><Lightbulb :size="13" /> 核心洞察</span>
         <span class="callout-text">{{ summary }}</span>
       </div>
       <p v-if="d.answer && !summary" class="rc-conclusion">{{ d.answer }}</p>
@@ -89,8 +89,8 @@
       <!-- 分组结果：表格 / 图表 切换 -->
       <template v-if="hasTable">
         <div class="view-switch">
-          <button :class="{ on: view === 'table' }" @click="view = 'table'">📋 表格</button>
-          <button :class="{ on: view === 'chart' }" @click="view = 'chart'">📊 图表</button>
+          <button :class="{ on: view === 'table' }" @click="view = 'table'"><Table2 :size="13" /> 表格</button>
+          <button :class="{ on: view === 'chart' }" @click="view = 'chart'"><BarChart3 :size="13" /> 图表</button>
         </div>
         <DataTable v-if="view === 'table'" :rows="d.display_rows" :value-key="groupValueKey" show-rank />
         <BaseChart v-else-if="groupChart" :option="groupChart" height="280px" />
@@ -98,7 +98,7 @@
 
       <!-- 执行明细折叠 -->
       <el-collapse v-if="d.sql" class="rc-detail">
-        <el-collapse-item title="🔍 查看分析逻辑与 SQL 执行明细">
+        <el-collapse-item title="查看分析逻辑与 SQL 执行明细">
           <div class="detail-line">来源表：<b>{{ tableLabel(d.table) }}</b>（{{ d.table }}）</div>
           <div class="detail-line">执行模式：<b>{{ modeLabel(d.execution_mode) }}</b> · 数据行 {{ d.row_count ?? 0 }}</div>
           <div class="rc-sql">{{ d.sql }}</div>
@@ -112,6 +112,7 @@
 
 <script setup lang="ts">
 import { computed, onErrorCaptured, ref } from 'vue'
+import { BarChart3, Lightbulb, Table2 } from 'lucide-vue-next'
 import BaseChart from '../charts/BaseChart.vue'
 import DataTable from './DataTable.vue'
 import { barOption, forestOption } from '../../charts'

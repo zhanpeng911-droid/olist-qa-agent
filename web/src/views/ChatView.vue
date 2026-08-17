@@ -1,21 +1,5 @@
 <template>
   <div class="chat">
-    <!-- 会话管理条 -->
-    <div class="session-bar">
-      <el-select v-model="currentId" size="small" class="session-select" @change="switchSession">
-        <el-option v-for="s in sessions" :key="s.id" :label="s.title" :value="s.id" />
-      </el-select>
-      <el-button size="small" type="primary" plain @click="newSession">＋ 新对话</el-button>
-      <el-button
-        v-if="sessions.length > 1"
-        size="small"
-        class="del-btn"
-        :icon="Delete"
-        @click="deleteSession"
-      >删除</el-button>
-      <span class="session-hint">对话记录保存在本机浏览器</span>
-    </div>
-
     <div class="chat-body" ref="bodyEl">
       <!-- 空状态：场景化提问矩阵 -->
       <div v-if="!messages.length" class="empty">
@@ -23,32 +7,32 @@
         <div class="empty-sub">选择下方的预设场景，或在底部直接输入自然语言问题</div>
         <div class="prompt-grid">
           <button v-for="p in prompts" :key="p.prompt" class="prompt-card" @click="send(p.prompt)">
-            <div class="prompt-icon">{{ p.icon }}</div>
+            <component :is="p.icon" :size="22" :stroke-width="1.6" class="prompt-icon" />
             <div class="prompt-title">{{ p.title }}</div>
             <div class="prompt-desc">{{ p.desc }}</div>
-            <span class="prompt-arrow">→</span>
+            <ArrowRight :size="14" class="prompt-arrow" />
           </button>
         </div>
       </div>
 
       <div v-for="(m, i) in messages" :key="i" class="msg" :class="m.role">
-        <div class="avatar" :class="m.role">{{ m.role === 'user' ? '👤' : '🤖' }}</div>
+        <div v-if="m.role === 'assistant'" class="avatar ai-avatar"><Sparkles :size="15" /></div>
+        <div v-else class="avatar user-avatar">企</div>
         <div class="bubble">
           <template v-if="m.role === 'user'">{{ m.text }}</template>
           <template v-else>
             <div v-if="m.intent" class="intent-tag">{{ intentLabel(m.intent) }}</div>
             <div v-if="m.running" class="running">{{ m.running }}</div>
             <MarkdownText v-if="m.text" :text="m.text" />
-            <!-- 历史消息摘要（大结果不持久化，显示可读摘要） -->
-            <div v-if="m.summary && !m.result" class="hist-summary">📋 {{ m.summary }}</div>
+            <div v-if="m.summary && !m.result" class="hist-summary">{{ m.summary }}</div>
             <ResultCard v-if="m.result && m.intent" :intent="m.intent" :d="m.result" />
             <div v-if="m.error" class="error">{{ m.error }}</div>
             <div v-if="m.steps?.length" class="steps">
               <div v-for="(s, j) in m.steps" :key="j" class="step">
-                {{ s.event === 'tool' ? `🔧 调用工具 ${s.tool}` : s.event }}
+                <Wrench v-if="s.event === 'tool'" :size="11" /> {{ s.event === 'tool' ? `调用工具 ${s.tool}` : s.event }}
               </div>
             </div>
-            <!-- 意图澄清：模糊/空结果时给维度选择 -->
+            <!-- 意图澄清 -->
             <div v-if="m.clarify?.length" class="suggestions">
               <span class="suggest-label">请问按哪个维度对比？</span>
               <button v-for="c in m.clarify" :key="c.prompt" class="suggest-chip" @click="send(c.prompt)">
@@ -70,7 +54,7 @@
     <!-- 悬浮输入区 -->
     <div class="chat-input">
       <div class="input-shell">
-        <span class="src-tag">📎 Olist 数据</span>
+        <span class="src-tag"><Paperclip :size="12" /> Olist 数据</span>
         <el-input
           v-model="input"
           placeholder="输入你的问题，例如：对低评分进行归因"
@@ -83,7 +67,7 @@
           <el-icon><Delete /></el-icon>
         </button>
         <button class="send-btn" :disabled="sending || !input.trim()" @click="send">
-          <el-icon v-if="!sending"><Promotion /></el-icon>
+          <Send v-if="!sending" :size="18" />
           <span v-else class="spinner"></span>
         </button>
       </div>
@@ -93,31 +77,29 @@
 </template>
 
 <script setup lang="ts">
-import { nextTick, onMounted, ref } from 'vue'
+import { nextTick, onMounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
-import { Delete, Promotion } from '@element-plus/icons-vue'
+import { Delete } from '@element-plus/icons-vue'
+import {
+  AlertTriangle, ArrowRight, BarChart3, Paperclip, Search, Send, Sparkles, TrendingUp, Wrench,
+} from 'lucide-vue-next'
 import { chatStream } from '../api'
 import MarkdownText from '../components/cards/MarkdownText.vue'
 import ResultCard from '../components/cards/ResultCard.vue'
-
-const STORAGE_KEY = 'olist_chat_sessions'
+import { useSessions } from '../composables/useSessions'
 
 const route = useRoute()
+const { sessions, currentId, switchSession, getMessages, setMessages, setTitle } = useSessions()
+
 const input = ref('')
 const sending = ref(false)
 const messages = ref<any[]>([])
 const bodyEl = ref<HTMLDivElement>()
 
-// ---------- 会话管理（localStorage 持久化） ----------
-const sessions = ref<any[]>([])
-const currentId = ref('')
-
-function uid() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 7) }
+// ---------- 会话消息序列化（大结果降级存摘要） ----------
 function fmtPct(v: number | undefined | null) {
   return v == null ? '—' : (v * 100).toFixed(1) + '%'
 }
-
-// 大结果不持久化 → 存一行可读摘要
 function summarizeResult(intent: string, d: any): string {
   if (intent === 'query') {
     const r = d?.display_rows?.[0]
@@ -132,7 +114,6 @@ function summarizeResult(intent: string, d: any): string {
   if (intent === 'statistical') return d?.conclusion || ''
   return d?.answer || ''
 }
-
 function serializeMessages(msgs: any[]) {
   return msgs.map((m) => {
     if (m.role === 'user') return { role: 'user', text: m.text }
@@ -141,81 +122,25 @@ function serializeMessages(msgs: any[]) {
     return s
   })
 }
-
 function hydrateMessages(list: any[]): any[] {
   return list.map((m) => m.role === 'user'
     ? { role: 'user', text: m.text }
     : { role: 'assistant', intent: m.intent, error: m.error, text: m.text, summary: m.summary, steps: [], result: null, clarify: [], suggestions: [] })
 }
-
-function persist() {
-  const list = sessions.value.map((s) => ({
-    ...s,
-    messages: s.id === currentId.value ? serializeMessages(messages.value) : s.messages,
-    updatedAt: s.id === currentId.value ? Date.now() : s.updatedAt,
-  }))
-  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(list)) } catch { /* 存储满则忽略 */ }
-}
-
-function loadFromStorage() {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY)
-    if (raw) {
-      const list = JSON.parse(raw)
-      if (Array.isArray(list) && list.length) {
-        sessions.value = list
-        currentId.value = list[0].id
-        return
-      }
-    }
-  } catch { /* 损坏则新建 */ }
-  const id = uid()
-  sessions.value = [{ id, title: '新对话', messages: [], updatedAt: Date.now() }]
-  currentId.value = id
-}
-
-function loadCurrentMessages() {
-  const s = sessions.value.find(x => x.id === currentId.value)
-  messages.value = s ? hydrateMessages(s.messages || []) : []
-}
-
-function switchSession(id: string) {
-  persist()                     // 保存当前
-  currentId.value = id
-  loadCurrentMessages()
+function loadCurrent() {
+  messages.value = hydrateMessages(getMessages())
   scrollBottom()
 }
 
-function newSession() {
-  persist()
-  const id = uid()
-  sessions.value.unshift({ id, title: '新对话', messages: [], updatedAt: Date.now() })
-  currentId.value = id
-  messages.value = []
-}
-
-function deleteSession() {
-  if (sessions.value.length <= 1) { clear(); return }
-  const idx = sessions.value.findIndex(x => x.id === currentId.value)
-  sessions.value.splice(idx, 1)
-  currentId.value = sessions.value[Math.max(0, idx - 1)].id
-  loadCurrentMessages()
-  persist()
-}
-
-function clear() {
-  messages.value = []
-  const s = sessions.value.find(x => x.id === currentId.value)
-  if (s) { s.messages = []; s.title = '新对话' }
-  persist()
-}
+// 侧边栏切换会话时同步
+watch(currentId, () => { loadCurrent() })
 
 // ---------- 预设 ----------
 const prompts = [
-  { icon: '🔍', title: '归因分析', desc: '对低评分进行归因', prompt: '对低评分进行归因' },
-  { icon: '📈', title: '相关性探索', desc: '延迟和低评分是否相关？', prompt: '延迟和低评分是否相关' },
-  { icon: '📊', title: '核心指标查询', desc: '总体延迟率和低评分率对比', prompt: '总体延迟率和低评分率是多少' },
-  { icon: '🚚', title: '异常排查', desc: '延迟 15 天以上的订单表现', prompt: '延迟 15 天以上的订单低评分率是多少' },
+  { icon: Search, title: '归因分析', desc: '对低评分进行归因', prompt: '对低评分进行归因' },
+  { icon: TrendingUp, title: '相关性探索', desc: '延迟和低评分是否相关？', prompt: '延迟和低评分是否相关' },
+  { icon: BarChart3, title: '核心指标查询', desc: '总体延迟率和低评分率对比', prompt: '总体延迟率和低评分率是多少' },
+  { icon: AlertTriangle, title: '异常排查', desc: '延迟 15 天以上的订单表现', prompt: '延迟 15 天以上的订单低评分率是多少' },
 ]
 
 const INTENT_LABEL: Record<string, string> = {
@@ -226,11 +151,11 @@ function intentLabel(i: string) { return INTENT_LABEL[i] ?? i }
 
 function suggestionsFor(intent: string): string[] {
   const map: Record<string, string[]> = {
-    attribution: ['📊 各客户州的低评分率对比', '🗺️ 各商品品类的低评分率对比'],
-    statistical: ['📈 查看低评分率的月度趋势', '🔍 各商品品类的低评分率对比'],
-    query: ['📈 查看低评分率的月度趋势', '🧮 各客户州的低评分率对比'],
-    deep_validation: ['📊 对低评分进行归因', '📈 延迟和低评分是否相关'],
-    other: ['📊 对低评分进行归因', '📈 延迟和低评分是否相关'],
+    attribution: ['各客户州的低评分率对比', '各商品品类的低评分率对比'],
+    statistical: ['查看低评分率的月度趋势', '各商品品类的低评分率对比'],
+    query: ['查看低评分率的月度趋势', '各客户州的低评分率对比'],
+    deep_validation: ['对低评分进行归因', '延迟和低评分是否相关'],
+    other: ['对低评分进行归因', '延迟和低评分是否相关'],
   }
   return map[intent] ?? map.other
 }
@@ -241,12 +166,11 @@ async function send(q?: unknown) {
   if (!question || sending.value) return
   input.value = ''
   sending.value = true
+  const firstMsg = !messages.value.length
   messages.value.push({ role: 'user', text: question })
   const ai: any = { role: 'assistant', steps: [], result: null, intent: '' }
   messages.value.push(ai)
-  // 更新会话标题为首次提问
-  const s = sessions.value.find(x => x.id === currentId.value)
-  if (s && (!s.messages || !s.messages.length)) s.title = question.slice(0, 18)
+  if (firstMsg) setTitle(currentId.value, question.slice(0, 18))
   scrollBottom()
 
   try {
@@ -262,9 +186,9 @@ async function send(q?: unknown) {
           const emptyQ = ai.intent === 'query' && !(data?.display_rows?.length) && !(data?.rows?.length)
           if (vague || emptyQ) {
             ai.clarify = [
-              { label: '🗺️ 按客户所在州对比', prompt: '各客户州的低评分率对比' },
-              { label: '💳 按支付方式对比', prompt: '各支付方式的低评分率对比' },
-              { label: '📦 按商品品类对比', prompt: '各商品品类的低评分率对比' },
+              { label: '按客户所在州对比', prompt: '各客户州的低评分率对比' },
+              { label: '按支付方式对比', prompt: '各支付方式的低评分率对比' },
+              { label: '按商品品类对比', prompt: '各商品品类的低评分率对比' },
             ]
           }
         }
@@ -276,13 +200,18 @@ async function send(q?: unknown) {
       },
       () => {
         ai.suggestions = ai.intent ? suggestionsFor(ai.intent) : []
-        persist()               // 会话保存到 localStorage
+        setMessages(serializeMessages(messages.value))
       },
-      (e) => { ai.error = String(e); persist() },
+      (e) => { ai.error = String(e); setMessages(serializeMessages(messages.value)) },
     )
   } finally {
     sending.value = false
   }
+}
+
+function clear() {
+  messages.value = []
+  setMessages([])
 }
 
 function scrollBottom() {
@@ -290,9 +219,10 @@ function scrollBottom() {
 }
 
 onMounted(() => {
-  loadFromStorage()
-  loadCurrentMessages()
-  // 顶部搜索框传入的问题：自动发送
+  // 侧边栏传入的会话 id
+  const sid = route.query.session as string | undefined
+  if (sid) switchSession(sid)
+  loadCurrent()
   const q = route.query.q as string | undefined
   if (q && q.trim()) send(q)
 })
@@ -300,48 +230,46 @@ onMounted(() => {
 
 <style scoped>
 .chat { display: flex; flex-direction: column; height: calc(100vh - 128px); }
-
-/* 会话管理条 */
-.session-bar { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
-.session-select { width: 220px; }
-.del-btn { color: var(--text-3); }
-.del-btn:hover { color: var(--red); }
-.session-hint { font-size: 11px; color: var(--text-3); margin-left: auto; }
-
 .chat-body { flex: 1; overflow-y: auto; padding-right: 8px; }
 
 /* 空状态 */
 .empty { height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; }
-.empty-title { font-size: 24px; font-weight: 700; color: #0F172A; }
-.empty-sub { font-size: 13px; color: var(--text-3); margin-bottom: 22px; }
+.empty-title { font-size: 24px; font-weight: 700; color: #0F172A; line-height: 1.5; }
+.empty-sub { font-size: 13px; color: var(--text-3); margin-bottom: 22px; line-height: 1.5; }
 .prompt-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; max-width: 560px; width: 100%; }
-.prompt-card { position: relative; display: flex; flex-direction: column; align-items: flex-start; gap: 6px; padding: 18px 20px; text-align: left; background: var(--card); border: 1px solid var(--border-soft); border-radius: var(--radius-lg); box-shadow: var(--shadow); cursor: pointer; transition: all .2s ease; }
+.prompt-card {
+  position: relative; display: flex; flex-direction: column; align-items: flex-start; gap: 6px;
+  padding: 18px 20px; text-align: left;
+  background: var(--card); border: 1px solid var(--border-soft);
+  border-radius: var(--radius-lg); box-shadow: var(--shadow);
+  cursor: pointer; transition: all .2s ease;
+}
 .prompt-card:hover { transform: translateY(-3px); border-color: var(--primary); box-shadow: 0 16px 34px -10px rgba(47,101,246,.22); }
-.prompt-icon { font-size: 22px; }
+.prompt-icon { color: var(--primary); }
 .prompt-title { font-size: 15px; font-weight: 700; color: var(--text-1); }
 .prompt-desc { font-size: 12px; color: var(--text-3); }
-.prompt-arrow { position: absolute; right: 14px; bottom: 12px; font-size: 14px; color: var(--text-3); transition: all .2s ease; }
+.prompt-arrow { position: absolute; right: 16px; bottom: 14px; color: var(--text-3); transition: all .2s ease; }
 .prompt-card:hover .prompt-arrow { color: var(--primary); transform: translateX(3px); }
 
 /* 消息 */
 .msg { display: flex; gap: 12px; margin-bottom: 22px; }
 .msg.user { flex-direction: row-reverse; }
-.avatar { width: 34px; height: 34px; border-radius: 50%; flex-shrink: 0; display: flex; align-items: center; justify-content: center; font-size: 15px; }
-.msg.assistant .avatar { background: linear-gradient(135deg, var(--sky), var(--primary)); }
-.msg.user .avatar { background: #E2E8F0; }
+.avatar { width: 32px; height: 32px; border-radius: 50%; flex-shrink: 0; display: flex; align-items: center; justify-content: center; }
+.ai-avatar { background: linear-gradient(135deg, #3B82F6, #6366F1); color: #fff; }
+.user-avatar {
+  background: linear-gradient(135deg, #E0E7FF, #DBEAFE); color: #4338CA;
+  font-weight: 700; font-size: 13px;
+}
 .bubble { max-width: 78%; padding: 14px 18px; border-radius: var(--radius-lg); background: var(--card); box-shadow: var(--shadow); }
 .msg.user .bubble { background: var(--primary); color: #fff; }
 .intent-tag { display: inline-block; font-size: 11px; color: var(--primary); background: #EFF6FF; padding: 2px 10px; border-radius: var(--radius-pill); margin-bottom: 8px; font-weight: 600; }
 .running { color: var(--text-3); font-size: 12px; margin-bottom: 6px; }
 .error { color: var(--red); font-size: 13px; }
 .steps { margin-top: 10px; }
-.step { font-size: 11px; color: var(--text-3); line-height: 1.9; }
-.hist-summary {
-  background: var(--bg); border-radius: var(--radius-md); padding: 10px 14px;
-  font-size: 13px; color: var(--text-2); line-height: 1.6;
-}
+.step { font-size: 11px; color: var(--text-3); line-height: 1.9; display: flex; align-items: center; gap: 5px; }
+.hist-summary { background: var(--bg); border-radius: var(--radius-md); padding: 10px 14px; font-size: 13px; color: var(--text-2); line-height: 1.6; }
 
-/* 追问/澄清胶囊 */
+/* 追问/澄清 */
 .suggestions { margin-top: 12px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .suggest-label { font-size: 11px; color: var(--text-3); }
 .suggest-chip { border: 1px solid var(--border-soft); background: #F8FAFF; color: var(--primary); font-size: 12px; padding: 6px 12px; border-radius: var(--radius-pill); cursor: pointer; transition: all .18s ease; }
@@ -351,11 +279,11 @@ onMounted(() => {
 .chat-input { margin-top: 14px; display: flex; flex-direction: column; align-items: center; gap: 8px; }
 .input-shell { display: flex; align-items: center; gap: 10px; width: min(760px, 100%); background: var(--card); border-radius: var(--radius-pill); padding: 8px 10px 8px 18px; box-shadow: 0 12px 32px -4px rgba(15,23,42,.08), 0 6px 18px -6px rgba(47,101,246,.12); border: 1px solid var(--border-soft); transition: box-shadow .2s ease, border-color .2s ease; }
 .input-shell:focus-within { border-color: var(--primary); box-shadow: 0 14px 34px -8px rgba(47,101,246,.26); }
-.src-tag { font-size: 11px; color: var(--text-2); background: var(--bg); padding: 4px 10px; border-radius: var(--radius-pill); white-space: nowrap; flex-shrink: 0; }
+.src-tag { font-size: 11px; color: var(--text-2); background: var(--bg); padding: 4px 10px; border-radius: var(--radius-pill); white-space: nowrap; flex-shrink: 0; display: inline-flex; align-items: center; gap: 5px; }
 .chat-field :deep(.el-input__wrapper) { box-shadow: none !important; background: transparent; padding: 0; }
 .clear-btn { width: 34px; height: 34px; border-radius: 50%; border: none; cursor: pointer; background: var(--bg); color: var(--text-3); flex-shrink: 0; display: flex; align-items: center; justify-content: center; }
 .clear-btn:hover { color: var(--red); background: var(--red-bg); }
-.send-btn { width: 42px; height: 42px; border-radius: 50%; border: none; cursor: pointer; background: linear-gradient(135deg, #2563EB, var(--primary)); color: #fff; display: flex; align-items: center; justify-content: center; font-size: 18px; flex-shrink: 0; transition: all .2s ease; box-shadow: 0 6px 14px -4px rgba(47,101,246,.5); }
+.send-btn { width: 42px; height: 42px; border-radius: 50%; border: none; cursor: pointer; background: linear-gradient(135deg, #2563EB, var(--primary)); color: #fff; display: flex; align-items: center; justify-content: center; flex-shrink: 0; transition: all .2s ease; box-shadow: 0 6px 14px -4px rgba(47,101,246,.5); }
 .send-btn:hover:not(:disabled) { transform: scale(1.05); }
 .send-btn:active:not(:disabled) { transform: scale(.96); }
 .send-btn:disabled { opacity: .45; cursor: not-allowed; }
