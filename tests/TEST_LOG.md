@@ -520,3 +520,46 @@ uv run uvicorn server.main:app --port 8000   # http://127.0.0.1:8000
 ### 24.4 说明
 - 之前 1000 行样本的"州/品类/月份分组不足"问题已随全量解决，看板图表自动补全
 
+---
+
+## 25. 正式 UI 全量联调修复（2026-08-17 后续）
+
+> 全量数据上线后的一系列问题与修复，均在 `server/main.py` / `agent_core/` / `web/src/`。
+
+### 25.1 看板 500：JSON 无法序列化 inf
+- 现象：全量归因 logistic 某 CI 边界 `exp` 溢出为 `inf` → `/api/attribution` 500
+- 根因：`json.dumps` 的 `default` 回调**不处理 inf**（inf 是合法 float，dumps 直接抛错）
+- 修复：`server/main.py` 新增 `_clean()` **递归清理**（inf/nan → null，先 `item()` 归一化 numpy 标量），`_json`/`_sse` 均使用
+- 验证：全量 logistic 82 项正常，延迟调整 OR=13.33（95%CI [12.54,14.17]）
+
+### 25.2 看板超时 + 归因缓存
+- 现象：全量归因 60-180s，前端 axios 120s 超时 → "timeout of 120000ms exceeded"
+- 修复：axios timeout 120s → **300s**；后端 `_cached_attribution` 归因缓存（TTL 最初 300s，后改 **86400s/24h**，数据静态、重启刷新）
+- 实测：首次 63.8s / 缓存命中 0.03s
+
+### 25.3 对话白屏（两处 JS 错误，靠全局 errorHandler 定位）
+- ① `intentLabel is not a function`：ChatView 重写时漏定义 `INTENT_LABEL`/`intentLabel`（模板已引用）→ 补回
+- ② `(d ?? t.value).trim is not a function`：`@keyup.enter`/`@click` 把 **Event 对象**传给 `send(q)`，`q.trim` 崩 → `send` 改为仅接受字符串参数
+- 配套：`main.ts` 加**全局 errorHandler**（白屏时底部红条显示错误）；`ResultCard` 加 `onErrorCaptured`（子渲染错误局部显示，不整页白屏）
+
+### 25.4 业务 Bug：SQL 漏过滤（"延迟 15 天以上"答非所问）
+- 现象：问"延迟 15 天以上订单低评分率"，SQL 无 `late_days >= 15`，算出的是全量大盘
+- 根因：`query_analysis.py` 的确定性解析**只提取指标/维度/排名，无筛选解析**；且 `query_mart` 过滤白名单仅限维度列
+- 修复：
+  - `query_analysis.py`：识别"延迟 X 天以上/以内/超过/至少" → `filters {late_days: {op:>=/<=, value:X}}`
+  - `tools.py`：新增 `FILTERABLE_COLUMNS` 数值列白名单（late_days/review_score/金额/时长，仅 WHERE 不 GROUP BY）
+- 全量实测：延迟15天+ = **87.49%** / 延迟3天以内 = 17.94% / 总体 = 21.07%（逻辑正确）
+
+### 25.5 前端展示重构（业务友好度）
+- query 结果：**核心大数字前置**（用后端 `display_rows` 业务化展示，不再暴露 `_m_` 表头）；技术参数（表/模式/SQL）收进**"执行明细"折叠面板**；表名/模式中文映射（mart_order_delivery→订单交付宽表、deterministic_query→确定性查询）
+
+### 25.6 模糊意图澄清
+- 现象："对比另一个维度" → 返回空数据
+- 修复：`ChatView` 检测模糊词（另一个维度/其他维度等）或空结果 → 显示**维度选择澄清卡片**（客户州/支付方式/品类），点击发送明确问题
+
+### 25.7 其它 UI 精修
+- 顶部时间筛选（近30/90/全年）为假交互 → 改为静态真实数据范围标签"📅 全量数据 · 2016-09 ~ 2018-10"
+
+### 25.8 测试
+- `tests/test_api.py` 7/7（全量数据下耗时约 2 分钟）；`tests/test_m1.py` 通过；回归无破坏
+
