@@ -18,7 +18,11 @@ QUERY_HINTS = [
     "用时", "几天", "多久", "晚到", "低分", "三星", "前五", "前十",
 ]
 META_HINTS = ["口径", "含义", "定义", "指标是什么意思", "怎么算"]
-ATTRIBUTION_HINTS = ["归因", "为什么", "原因", "优先治理", "改善建议", "哪个因素"]
+# 明确归因动作
+ATTRIBUTION_ACTION = ["归因", "优先治理", "改善建议"]
+# “为什么/原因/哪些因素”等归因词，需围绕低评分主题才归因，否则交给开放式（LLM）
+ATTRIBUTION_REASON = ["为什么", "原因", "哪些因素", "什么因素", "影响因素", "是什么导致", "导致"]
+LOWSCORE_THEME = ("低评分", "低分", "评分", "延迟", "晚到", "星级")
 
 
 class Intent:
@@ -28,21 +32,22 @@ class Intent:
         self._s = semantic
 
     def classify(self, question: str) -> str:
-        # “低评分归因”现在本身就会自动完成单变量筛查与调整模型。
-        # 因此用户明确写出“归因”时，不应再被“调整后/控制混杂”等泛化
-        # 深度词抢占；只有明确写“深度验证”才进入独立补充验证入口。
-        if "深度验证" in question:
-            return "deep_validation"
-        if "归因" in question:
+        # 明确写“归因/优先治理/改善建议”→ 低评分归因
+        if any(h in question for h in ATTRIBUTION_ACTION):
             if is_statistical_question(question):
                 return "statistical"
             return "attribution"
-        if is_deep_validation_question(question):
+        # 深度验证
+        if "深度验证" in question or is_deep_validation_question(question):
             return "deep_validation"
+        # 统计问题
         if is_statistical_question(question):
             return "statistical"
-        if any(h in question for h in ATTRIBUTION_HINTS):
-            return "attribution"   # 归因诊断（L2）
+        # “为什么/哪些因素”等：只有围绕低评分主题才归因；否则开放式（LLM 解释）
+        if any(h in question for h in ATTRIBUTION_REASON):
+            if any(t in question for t in LOWSCORE_THEME):
+                return "attribution"
+            return "other"
         if any(h in question for h in META_HINTS):
             return "meta"          # 口径询问
         if any(h in question.lower() for h in QUERY_HINTS):

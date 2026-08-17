@@ -588,3 +588,35 @@ uv run uvicorn server.main:app --port 8000   # http://127.0.0.1:8000
 ### 26.4 开发规范（写入方案）
 > **确定性-LLM 分工原则**：能确定的用确定性快路径（可对账、快）；不能确定的明确回退 LLM（DeepSeek），**绝不静默降级**。别名库持续补全以扩大确定性覆盖。
 
+---
+
+## 27. 其他模块边界检查与修复（2026-08-17）
+
+> 对 query 之外的模块（intent / statistical / deep_validation / attribution）做边界测试，发现并修复 4 类问题。
+
+### 27.1 函数级测试发现的问题
+| 问题 | 现象 | 修复 |
+|---|---|---|
+| intent 误分类 | "哪些因素影响低评分"→query（应 attribution）；"为什么这个月订单变少了"→attribution（应开放式） | `intent.py`：明确"归因/优先治理/改善建议"才 attribution；"为什么/哪些因素"需围绕低评分主题才 attribution，否则归入 other（LLM 解释） |
+| query 完全未识别无兜底 | 指标也未识别时显示"未识别"，无 LLM 兜底 | `server/main.py` query 分支：`plan.ok=False` 或 `incomplete` 都回退 LLM |
+| attribution 不支持目标无兜底 | "退款原因归因"走确定性但报 unsupported | `server/main.py` attribution 分支：`unsupported_target` → 回退 LLM 解释边界 |
+| supports 判定漏网 | "对退款**原因**归因"（"原因归因"连用、无"进行"）未被正则识别为非低评分 | `attribution.py` 正则扩为 `对X(进行\|做)?(原因)?(归因\|原因分析)` |
+
+### 27.2 端到端验证（/api/chat SSE）
+| 输入 | 期望 | 实际 |
+|---|---|---|
+| 哪些因素影响低评分 | attribution | ✅ 确定性归因 result |
+| 为什么这个月订单变少了 | other→LLM | ✅ LLM 兜底 |
+| 对退款原因归因 | attribution→unsupported→LLM | ✅ LLM 解释"无退款数据" |
+| 对退款进行归因 / 对高评分进行归因 | 同上 | ✅ LLM 兜底 |
+| 对低评分进行归因 | attribution | ✅ 确定性 |
+| 运费和满意度关系 | other→LLM | ✅ LLM 兜底 |
+| 各商品品类的低评分率对比 | query 确定性 | ✅ 品类分组 |
+| 深度验证一下（空特征） | deep_validation 默认特征 | ✅ 6 个特征结果正常 |
+
+### 27.3 结论
+- `deep_validation` 空特征有默认特征集，无静默空结果 ✅
+- statistical 确定性失败已由 other/兜底覆盖 ✅
+- 全模块统一"确定性优先 + LLM 兜底"、绝不静默降级 ✅
+- 回归：test_api 7/7 + test_m1 通过
+

@@ -191,9 +191,9 @@ async def api_chat(body: QuestionBody):
         provider = get_provider()
         try:
             if intent == "query":
-                # 确定性解析不完整（要求分组/对比/趋势但维度未识别）→ 回退 LLM
+                # 确定性解析未识别（无指标）或不完整（有指标但丢维度）→ 回退 LLM
                 plan = plan_query_question(body.question, semantic)
-                if plan.get("incomplete"):
+                if not plan.get("ok") or plan.get("incomplete"):
                     yield _sse("running", {"stage": "智能解析中…"})
                     res = _react_answer(body.question, provider, semantic)
                     for t in res.get("trace", []):
@@ -219,7 +219,16 @@ async def api_chat(body: QuestionBody):
             elif intent == "attribution":
                 yield _sse("running", {"stage": "进行低评分关联因素分析…"})
                 res = _cached_attribution(body.question)
-                yield _sse("result", res)
+                if res.get("unsupported_target"):
+                    # 目标非低评分（如“退款原因归因”）→ 改用 LLM 解释边界
+                    yield _sse("running", {"stage": "该目标暂不支持自动化归因，改用智能推理…"})
+                    res2 = _react_answer(body.question, provider, semantic)
+                    for t in res2.get("trace", []):
+                        yield _sse("step", t)
+                    yield _sse("answer", {"answer": res2.get("answer", ""),
+                                          "ok": res2.get("ok", False)})
+                else:
+                    yield _sse("result", res)
             elif intent == "deep_validation":
                 yield _sse("running", {"stage": "进行深度验证…"})
                 res = analyze_deep_validation(provider, body.question)

@@ -82,8 +82,8 @@ def supports_attribution_target(question: str | None) -> bool:
     if any(hint in question for hint in LOW_SCORE_TARGET_HINTS):
         return True
     # “请进行归因分析”没有明确目标时仍按低评分处理；一旦用户以
-    # “对X进行归因”明确点名了其他目标，则拒绝，不静默偷换目标。
-    explicit_target = re.search(r"对(.{1,20}?)进行(?:归因|原因分析)", question)
+    # “对X进行归因 / 对X原因归因 / 对X做归因”明确点名了其他目标，则拒绝，不静默偷换目标。
+    explicit_target = re.search(r"对(.{1,20}?)(?:进行|做)?(?:原因)?(?:归因|原因分析)", question)
     if explicit_target:
         return False
     return not any(hint in question for hint in UNSUPPORTED_ATTRIBUTION_TARGET_HINTS)
