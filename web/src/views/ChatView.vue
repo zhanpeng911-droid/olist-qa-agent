@@ -106,8 +106,9 @@ function suggestionsFor(intent: string): string[] {
 
 function clear() { messages.value = []; input.value = '' }
 
-async function send(q?: string) {
-  const question = (q ?? input.value).trim()
+async function send(q?: unknown) {
+  // @keyup.enter / @click 会传入事件对象；胶囊才传字符串——只接受字符串作为问题
+  const question = (typeof q === 'string' && q ? q : input.value).trim()
   if (!question || sending.value) return
   input.value = ''
   sending.value = true
