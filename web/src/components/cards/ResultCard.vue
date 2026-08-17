@@ -13,7 +13,7 @@
         </div>
         <div class="rc-metric">
           <span>延迟 OR</span>
-          <b>{{ d.verification?.evidence?.or?.toFixed?.(2) ?? '—' }}</b>
+          <b>{{ fmtNum(d.verification?.evidence?.or) }}</b>
         </div>
         <div class="rc-metric">
           <span>证据分级</span>
@@ -66,11 +66,14 @@
     <template v-else-if="intent === 'statistical'">
       <div class="rc-row">
         <div class="rc-metric"><span>方法</span><b>{{ d.method_label ?? '—' }}</b></div>
-        <div class="rc-metric"><span>p 值</span><b>{{ d.p_adjusted ?? d.p ?? '—' }}</b></div>
-        <div class="rc-metric"><span>效应量</span><b>{{ d.effect_size ?? d.or ?? '—' }}</b></div>
+        <div class="rc-metric"><span>p 值</span><b>{{ fmtP(d.p_adjusted ?? d.p) }}</b></div>
+        <div class="rc-metric"><span>效应量</span><b>{{ fmtNum(d.effect_size ?? d.or) }}</b></div>
         <div class="rc-metric"><span>显著</span><b>{{ d.significant ? '是' : '否' }}</b></div>
       </div>
-      <p v-if="d.conclusion" class="rc-conclusion">{{ d.conclusion }}</p>
+      <div v-if="d.conclusion" class="callout">
+        <span class="callout-label">💡 核心结论</span>
+        <span class="callout-text">{{ d.conclusion }}</span>
+      </div>
       <p v-if="d.method_reason" class="rc-caveat">{{ d.method_reason }}</p>
       <div v-if="d.top_groups?.length">
         <h4 class="rc-title">分组详情</h4>
@@ -108,6 +111,7 @@
 import { computed } from 'vue'
 import BaseChart from '../charts/BaseChart.vue'
 import { forestOption } from '../../charts'
+import { fmtNum, fmtP } from '../../format'
 
 const props = defineProps<{ intent: string; d: any }>()
 
@@ -144,6 +148,13 @@ function shortTerm(t: string) {
 .rc-metric b { font-size: 18px; font-weight: 700; color: var(--text-1); }
 .rc-title { font-size: 14px; font-weight: 600; margin: 14px 0 10px; color: var(--text-2); }
 .rc-conclusion { color: var(--text-1); font-size: 14px; line-height: 1.7; }
+.callout {
+  display: flex; flex-direction: column; gap: 4px;
+  background: #EFF6FF; border-left: 3px solid var(--primary);
+  border-radius: var(--radius-md); padding: 12px 14px; margin-bottom: 10px;
+}
+.callout-label { font-size: 12px; font-weight: 700; color: var(--primary); }
+.callout-text { font-size: 13px; color: var(--text-1); line-height: 1.7; }
 .rc-caveat { color: var(--text-3); font-size: 12px; margin-top: 12px; line-height: 1.6; }
 .rc-sql {
   margin-top: 10px; font-size: 12px; color: var(--text-3);

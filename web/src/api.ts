@@ -23,13 +23,16 @@ export async function getMeta() {
   return (await http.get('/meta')).data
 }
 
-/** SSE 流式对话：onEvent(event, data)，结束时 onDone() */
+/** SSE 流式对话：onEvent(event, data)，结束时 onDone()（finally 保证必然回调） */
 export async function chatStream(
   question: string,
   onEvent: (event: string, data: any) => void,
   onDone: () => void,
   onError: (err: any) => void,
 ) {
+  let finished = false
+  const finish = () => { if (!finished) { finished = true; onDone() } }
+  const fail = (e: any) => { if (!finished) { finished = true; onError(e) } }
   try {
     const resp = await fetch('/api/chat', {
       method: 'POST',
@@ -59,8 +62,8 @@ export async function chatStream(
         }
       }
     }
-    onDone()
+    finish()
   } catch (e) {
-    onError(e)
+    fail(e)
   }
 }

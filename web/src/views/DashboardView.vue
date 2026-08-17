@@ -38,7 +38,7 @@
           <el-empty v-else description="样本不足，无州级分组数据" :image-size="60" />
         </div>
         <div class="s-card chart-card">
-          <h3 class="s-title">支付方式 · 低评分率</h3>
+          <h3 class="s-title">低评分订单 · 支付方式构成</h3>
           <BaseChart v-if="payDonut" :option="payDonut" height="260px" />
           <el-empty v-else description="样本不足，无支付方式分组" :image-size="60" />
         </div>
@@ -98,11 +98,14 @@ const notices = computed(() => {
 const kpis = computed(() => {
   const base = attr.value?.baseline?.order
   const lowRate = base?.low_score_rate as number | undefined
+  const cleanTrend = trend.value
+    .filter((r: any) => (r._m_order_count ?? 100) >= 10)
+    .map((r: any) => r._m_low_score_rate)
   return [
     {
       label: '低评分率', value: fmtPct(lowRate),
       pillText: `样本 ${base?.sample ?? 0}`,
-      spark: trend.value.map((r: any) => r._m_low_score_rate),
+      spark: cleanTrend,
     },
     {
       label: '延迟率', value: lateRate.value == null ? '—' : fmtPct(lateRate.value),
@@ -131,18 +134,26 @@ const PAY_LABEL: Record<string, string> = {
   debit_card: '借记卡', not_defined: '未定义',
 }
 
+// 低评分订单的支付方式构成（计数占比，凑满 100%）
 const payDonut = computed(() => {
   const gs = groupsOf('primary_payment_type').slice(0, 6)
   if (!gs.length) return null
-  return donutOption(
-    gs.map((g: any) => `${PAY_LABEL[g.value] ?? g.value} (${(g.low_score_rate * 100).toFixed(0)}%)`),
-    gs.map((g: any) => g.low_score_rate * 100),
-    String(baseSample.value),
-  )
+  const total = gs.reduce((s, g) => s + (g.low_score_count ?? 0), 0)
+  if (!total) return null
+  const values = gs.map((g: any) => g.low_score_count ?? 0)
+  const labels = gs.map((g: any) => {
+    const share = ((g.low_score_count ?? 0) / total * 100).toFixed(0)
+    return `${PAY_LABEL[g.value] ?? g.value} ${g.low_score_count ?? 0} 单 (${share}%)`
+  })
+  return donutOption(labels, values, String(total))
 })
 
+// 过滤冷启动小样本月（如 2016-10 仅 2 单），再画趋势
 const trendArea = computed(() => {
-  const rows = trend.value.slice().sort((a: any, b: any) => (a.order_month < b.order_month ? -1 : 1))
+  const rows = trend.value
+    .filter((r: any) => (r._m_order_count ?? 100) >= 10)
+    .slice()
+    .sort((a: any, b: any) => (a.order_month < b.order_month ? -1 : 1))
   if (rows.length < 2) return null
   return areaOption(rows.map((r: any) => r.order_month), rows.map((r: any) => r._m_low_score_rate), '低评分率')
 })
@@ -159,7 +170,7 @@ onMounted(async () => {
     const [lr, sc, tr] = await Promise.all([
       runQuery('总体延迟率是多少'),
       runQuery('平均评分是多少'),
-      runQuery('各月份低评分率趋势'),
+      runQuery('各月份低评分率和订单量'),
     ])
     const row0 = lr?.rows?.[0] ?? {}
     const k = Object.keys(row0).find(x => x.includes('late') || x.includes('delay'))
