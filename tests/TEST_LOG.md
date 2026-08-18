@@ -820,3 +820,51 @@ uv run uvicorn server.main:app --port 8000   # http://127.0.0.1:8000
 ### 35.4 验证
 - 修复后 API 实测：差评→attribution✓、运费100以上→3.66✓、运费>50→29.71%✓、金额200以上→3.32✓、运费30以内→6.46%✓
 - 回归：tests/test_query_analysis.py + test_m1.py → 21 passed
+
+---
+
+## 36. 压力评测暴露：MySQL 表字段 BOM 污染修复
+
+> 日期：2026-08-18
+> 触发：运行 `run_model_eval.py --source mysql --repeat 3`（复现朋友的压力测试）时，启动即失败：`inspect_marts` 报三张表都缺 `order_id`
+
+### 36.1 根因
+- 三张 Mart 表的首列名为 `\ufefforder_id`（带 UTF-8 BOM 字符），是当初 CSV 导入时 BOM 编码残留
+- 正式 UI 因 `_compatibility_sql` 用 `m.*` 通配不直接引用列名，未暴露；`inspect_marts` 用精确字段名校验即失败
+
+### 36.2 修复
+- `ALTER TABLE ... CHANGE COLUMN \`\ufefforder_id\` \`order_id\`` 重命名三张表（mart_order_delivery / mart_order_seller_delivery / mart_order_item_business）
+- 修复后 `inspect_marts` 通过：99441 / 100010 / 112650 行，字段缺失 = 空
+
+### 36.3 压力评测（41题×3轮，全量MySQL）运行中
+- 目的：复现 README 记录的 DeepSeek 重复稳定性评测（friend 版 99.19%）
+- 首 11 轮：意图正确 11/11、工具路径正确 11/11、完成 11/11（单轮 4-5s）
+
+---
+
+## 37. 压力评测复现（41题×3轮）+ 归因连接断连 bug 根治
+
+> 日期：2026-08-18
+> 目的：复现 README 记录的 DeepSeek 重复稳定性压力评测（--source mysql --repeat 3），验证当前版本稳定性
+
+### 37.1 评测过程暴露的 bug（两个）
+1. **MySQL 表字段 BOM 污染**：三张 Mart 表首列是 `\ufefforder_id`（CSV 导入残留 BOM），`inspect_marts` 校验失败。已 ALTER TABLE 重命名修复
+2. **归因长任务连接断连（根因）**：MySQLProvider 单一连接跑 18 因素检验 + Logistic，中途被服务端回收（`InterfaceError: (0,'')`），导致所有因素 ok=False、selected_features 空、归因耗时 184s+ 且结果全失败
+   - 修复：`data_provider.py` 的 `execute` 增加**连接失效自动重连**（InterfaceError / OperationalError 2006/2013/1927 时重连重试当前 SQL），并统一 pymysql import
+
+### 37.2 修复后验证
+- 第一层筛查：18 因素全部 ok=True、p=0.0、retained=True（15.9s）
+- 完整归因第 5 步：14 个因素进入调整后 Logistic（is_late_delivery/approval_days/customer_state/route 等），102s 正常
+
+### 37.3 压力评测最终结果（123 轮全跑完）
+| 指标 | 朋友基线(08-17) | 本次(08-18) |
+|---|---|---|
+| 意图识别准确率 | 100.00% | 100.00% |
+| 回答完成率 | 99.19% | **100.00%** |
+| 正确工具路径率 | 99.19% | **100.00%** |
+| 重复路径一致率 | 80.49% | **85.37%** |
+| DeepSeek 完成率 | 98.67% | **100.00%** |
+| 延迟 P50 / P95 | 5.45s / 88.3s | 6.48s / 441.7s |
+
+- 0 失败；P95 升高因归因慢题（M-27/28/37 每轮约 460s，全量计算本身耗时，非失败）
+- 报告：`artifacts/evaluations/model_eval_20260818_141726.json`

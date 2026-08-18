@@ -16,6 +16,8 @@ from abc import ABC, abstractmethod
 from datetime import datetime
 from pathlib import Path
 
+import pymysql
+
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 _DEFAULT_SAMPLE_DIR = _PROJECT_ROOT / "data" / "sample"
 _configured_sample_dir = os.environ.get("PROJECT_DATA_DIR")
@@ -294,8 +296,6 @@ class MySQLProvider(DataProvider):
                  database=None, item_table=None,
                  allow_tables: list[str] | None = None,
                  max_rows: int = 10000) -> None:
-        import pymysql  # 延迟导入
-
         self._host = host or os.environ.get("DB_HOST")
         self._port = int(port or os.environ.get("DB_PORT", "3306"))
         self._user = user or os.environ.get("DB_USER")
@@ -312,13 +312,7 @@ class MySQLProvider(DataProvider):
             )
         self._allow_tables = allow_tables or []
         self._max_rows = max_rows
-        self._conn = pymysql.connect(
-            host=self._host, port=self._port, user=self._user,
-            password=self._password, database=self._database,
-            charset="utf8mb4", cursorclass=pymysql.cursors.DictCursor,
-            connect_timeout=5, read_timeout=180, write_timeout=30,
-            autocommit=True,
-        )
+        self._conn = self._connect_raw()
         self.source_name = DATABASE_SOURCE_LABEL
 
     def _check_sql(self, sql: str) -> None:
@@ -336,10 +330,45 @@ class MySQLProvider(DataProvider):
     def execute(self, sql: str) -> list[dict]:
         self._check_sql(sql)
         sql = self._compatibility_sql(sql)
+        return self._execute_with_retry(sql)
+
+    def _execute_with_retry(self, sql: str) -> list[dict]:
+        """执行 SQL；连接在长任务中被服务端断开（InterfaceError）时自动重连重试一次。
+
+        全量归因等长任务会复用同一连接跑大量 SQL，若中途连接失效（如 wait_timeout、
+        服务端回收），后续查询会全部失败。检测到连接错误时重连并重试当前语句。
+        """
+        try:
+            return self._run(sql)
+        except pymysql.InterfaceError as exc:
+            if "timed out" not in str(exc).lower():
+                # 连接中断：重连后重试当前语句一次
+                self._conn.close()
+                self._conn = self._connect_raw()
+                return self._run(sql)
+            raise
+        except pymysql.OperationalError as exc:
+            code = getattr(exc, "args", [None])[0]
+            if code in (2006, 2013, 1927):   # server has gone away / lost connection
+                self._conn.close()
+                self._conn = self._connect_raw()
+                return self._run(sql)
+            raise
+
+    def _run(self, sql: str) -> list[dict]:
         with self._conn.cursor() as cur:
             cur.execute(sql)
             rows = cur.fetchall()
         return [dict(r) for r in rows]
+
+    def _connect_raw(self):
+        return pymysql.connect(
+            host=self._host, port=self._port, user=self._user,
+            password=self._password, database=self._database,
+            charset="utf8mb4", cursorclass=pymysql.cursors.DictCursor,
+            connect_timeout=5, read_timeout=180, write_timeout=30,
+            autocommit=True,
+        )
 
     def close(self) -> None:
         self._conn.close()
