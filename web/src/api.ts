@@ -23,6 +23,34 @@ export async function getMeta() {
   return (await http.get('/meta')).data
 }
 
+// ---------- 会话历史（MySQL 持久化） ----------
+export async function listSessions(): Promise<any[]> {
+  const { data } = await http.get('/sessions')
+  return data.sessions ?? []
+}
+
+export async function createSession(title = '新对话'): Promise<any> {
+  const { data } = await http.post('/sessions', { title })
+  return data.session
+}
+
+export async function renameSession(id: string, title: string) {
+  await http.post(`/sessions/${id}/rename`, { title })
+}
+
+export async function deleteSession(id: string) {
+  await http.delete(`/sessions/${id}`)
+}
+
+export async function getMessages(sid: string): Promise<any[]> {
+  const { data } = await http.get(`/sessions/${sid}/messages`)
+  return data.messages ?? []
+}
+
+export async function saveMessages(sid: string, messages: any[]) {
+  await http.post(`/sessions/${sid}/messages`, { messages })
+}
+
 /** SSE 流式对话：onEvent(event, data)，结束时 onDone()（finally 保证必然回调） */
 export async function chatStream(
   question: string,

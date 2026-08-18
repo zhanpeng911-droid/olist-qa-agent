@@ -28,6 +28,9 @@ tables:
       - delay_bucket            # 延迟分档: 按时/1-3天/4-7天/8-14天/15天+
       - is_late_delivery        # 是否延迟(0/1)，用于按时vs延迟对比
       - order_month             # 购买月份(YYYY-MM)，时间趋势
+      - order_year              # 购买年份(YYYY)，期间对比/年度趋势
+    dimension_exprs:
+      order_year: "SUBSTR(order_month, 1, 4)"
     filters:
       valid_sample: "is_delivery_analysis_eligible = 1"   # 履约分析有效样本
       reviewed_only: "has_review_record = 1"              # 有评价订单（低评分分母）

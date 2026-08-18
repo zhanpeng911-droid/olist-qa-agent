@@ -84,7 +84,7 @@
         <span class="callout-label"><Lightbulb :size="13" /> 核心洞察</span>
         <span class="callout-text">{{ summary }}</span>
       </div>
-      <p v-if="d.answer && !summary" class="rc-conclusion">{{ d.answer }}</p>
+      <p v-if="conclusionText" class="rc-conclusion">{{ conclusionText }}</p>
 
       <!-- 分组结果：表格 / 图表 切换 -->
       <template v-if="hasTable">
@@ -104,6 +104,15 @@
           <div class="rc-sql">{{ d.sql }}</div>
         </el-collapse-item>
       </el-collapse>
+
+      <!-- 继续追问快捷胶囊 -->
+      <div v-if="suggestions?.length" class="followups">
+        <span class="fu-label">继续追问</span>
+        <button v-for="s in suggestions" :key="s.prompt" class="fu-chip" @click="$emit('followup', s.prompt)">
+          <component :is="s.icon === 'trend' ? TrendingUp : s.icon === 'map' ? Map : s.icon === 'chart' ? BarChart3 : s.icon === 'spark' ? Lightbulb : ArrowRight" :size="12" />
+          {{ s.label }}
+        </button>
+      </div>
     </template>
 
     <div v-else class="rc-caveat">（暂无结构化渲染，请查看上方文本回答）</div>
@@ -112,13 +121,14 @@
 
 <script setup lang="ts">
 import { computed, onErrorCaptured, ref } from 'vue'
-import { BarChart3, Lightbulb, Table2 } from 'lucide-vue-next'
+import { ArrowRight, BarChart3, Lightbulb, Map, Table2, TrendingUp } from 'lucide-vue-next'
 import BaseChart from '../charts/BaseChart.vue'
 import DataTable from './DataTable.vue'
 import { barOption, forestOption } from '../../charts'
 import { fmtNum, fmtP } from '../../format'
 
-const props = defineProps<{ intent: string; d: any }>()
+const props = defineProps<{ intent: string; d: any; suggestions?: { label: string; prompt: string; icon?: string }[] }>()
+const emit = defineEmits<{ (e: 'followup', prompt: string): void }>()
 
 const renderError = ref('')
 onErrorCaptured((err) => {
@@ -215,6 +225,24 @@ const summary = computed(() => {
   return `${dimKey}「${max.label}」${vk}最高（${max.v}%），「${min.label}」最低（${min.v}%），差异 ${(max.v! - min.v!).toFixed(1)} 个百分点。`
 })
 
+// 无分组（总体指标）时的加粗业务结论，替代重复的原始 answer 纯文本
+const conclusionText = computed(() => {
+  if (props.intent !== 'query') return ''
+  if (hasTable.value) return ''
+  const row = props.d?.display_rows?.[0]
+  if (!row) return ''
+  const parts = Object.entries(row)
+  if (!parts.length) return ''
+  const texts = parts.map(([k, v]) => `${k} ${v}`).join('，')
+  const k0 = parts[0][0]
+  const v0 = String(parts[0][1])
+  // 对典型的比率指标生成业务化表述
+  if (/率/.test(k0)) {
+    return `当前${k0}为 ${v0}，整体表现${(parseFloat(v0) <= 25) ? '处于可控区间' : '偏高，值得关注'}。`
+  }
+  return texts
+})
+
 // 分组图表（横向条形）
 const groupChart = computed(() => {
   if (!hasTable.value || !groupValueKey.value) return null
@@ -251,7 +279,7 @@ function shortTerm(t: string) {
 .rc-metric span { font-size: 12px; color: var(--text-3); }
 .rc-metric b { font-size: 18px; font-weight: 700; color: var(--text-1); }
 .rc-title { font-size: 14px; font-weight: 600; margin: 14px 0 10px; color: var(--text-2); }
-.rc-conclusion { color: var(--text-1); font-size: 14px; line-height: 1.7; }
+.rc-conclusion { color: var(--text-1); font-size: 13px; font-weight: 600; line-height: 1.7; margin: 0 0 4px; }
 .rc-caveat { color: var(--text-3); font-size: 12px; margin-top: 12px; line-height: 1.6; }
 .rc-error { background: var(--red-bg); color: var(--red); padding: 8px 12px; border-radius: var(--radius-sm); font-size: 12px; margin-bottom: 10px; }
 .callout { display: flex; flex-direction: column; gap: 4px; background: #EFF6FF; border-left: 3px solid var(--primary); border-radius: var(--radius-md); padding: 12px 14px; margin-bottom: 10px; }
@@ -273,4 +301,9 @@ function shortTerm(t: string) {
 .rec-head { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
 .rec-resp { color: var(--primary); font-size: 12px; margin-left: auto; }
 .rec-body { font-size: 13px; color: var(--text-2); line-height: 1.8; }
+.followups { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+.fu-label { font-size: 11px; color: var(--text-3); }
+.fu-chip { display: inline-flex; align-items: center; gap: 5px; border: 1px solid var(--border-soft); background: #F8FAFF; color: var(--primary); font-size: 12px; padding: 6px 12px; border-radius: var(--radius-pill); cursor: pointer; transition: all .18s ease; }
+.fu-chip:hover { background: #EFF6FF; border-color: var(--primary); }
+.fu-chip svg { flex-shrink: 0; }
 </style>

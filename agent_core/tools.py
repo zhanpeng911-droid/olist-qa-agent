@@ -122,10 +122,16 @@ class Tools:
             selects.append(f"{expr} AS {alias}")
             aliases.append(alias)
 
+        # 维度 select 与 GROUP BY：表达式维度用原表达式（MySQL 不支持 GROUP BY 别名）
+        dim_selects: list[str] = []
+        dim_groups: list[str] = []
         for d in dimensions:
             if not self._s.check_dimension(table, d):
                 return {"ok": False, "error": f"维度不存在: {d}"}
-            selects.append(d)
+            expr = self._s.get_dimension_expr(table, d)
+            dim_selects.append(f"{expr} AS {d}" if expr else d)
+            dim_groups.append(expr or d)
+        selects.extend(dim_selects)
 
         sql = f'SELECT {", ".join(selects)} FROM {table}'
 
@@ -146,7 +152,7 @@ class Tools:
             sql += " WHERE " + " AND ".join(where)
 
         if dimensions:
-            sql += " GROUP BY " + ", ".join(dimensions)
+            sql += " GROUP BY " + ", ".join(dim_groups)
 
         # 排序：兼容多字段写法；每个字段仍须在本次查询白名单中。
         if order_by:

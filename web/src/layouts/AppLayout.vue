@@ -41,7 +41,7 @@
           >
             <MessageSquare :size="14" :stroke-width="1.8" class="si-ico" />
             <span class="si-title" :title="s.title">{{ s.title }}</span>
-            <span v-if="s.messages?.length" class="si-count">{{ s.messages.length }}</span>
+            <span v-if="s.messageCount" class="si-count">{{ s.messageCount }}</span>
             <button class="si-del" title="删除会话" @click.stop="remove(s.id)">
               <Trash2 :size="13" />
             </button>
@@ -73,7 +73,7 @@
           </span>
           <button class="icon-btn" aria-label="通知"><el-icon :size="18"><Bell /></el-icon></button>
           <div class="user">
-            <div class="user-avatar">企</div>
+            <div class="user-avatar"><User :size="18" :stroke-width="2" /></div>
             <div class="user-text">
               <div class="user-name">企业分析员 <span class="role-badge">业务分析</span></div>
               <div class="user-hello">Welcome Back 👋</div>
@@ -93,7 +93,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
-  Bell, Calendar, LayoutDashboard, MessageSquare, MessageSquareCode, Plus, Search, Trash2,
+  Bell, Calendar, LayoutDashboard, MessageSquare, MessageSquareCode, Plus, Search, Trash2, User,
 } from 'lucide-vue-next'
 import { getMeta } from '../api'
 import { useSessions } from '../composables/useSessions'
@@ -102,7 +102,7 @@ const route = useRoute()
 const router = useRouter()
 const meta = ref<any>(null)
 const searchQ = ref('')
-const { sessions, currentId, newSession, switchSession, deleteSession } = useSessions()
+const { sessions, currentId, newSession, switchSession, deleteSession, loadSessions } = useSessions()
 
 const sourceLabel = computed(() => meta.value?.source_label ?? '加载中…')
 
@@ -116,16 +116,16 @@ const groups = [
   },
 ]
 
-function startNew() {
-  const id = newSession()
+async function startNew() {
+  const id = await newSession()
   router.push({ path: '/chat', query: { session: id } })
 }
-function openSession(id: string) {
-  switchSession(id)
+async function openSession(id: string) {
+  await switchSession(id)
   router.push({ path: '/chat', query: { session: id } })
 }
-function remove(id: string) {
-  deleteSession(id)
+async function remove(id: string) {
+  await deleteSession(id)
   if (route.path === '/chat') router.replace({ path: '/chat', query: { session: currentId.value } })
 }
 
@@ -138,6 +138,7 @@ function doSearch() {
 
 onMounted(async () => {
   try { meta.value = await getMeta() } catch { /* 后端未启动 */ }
+  await loadSessions()
 })
 </script>
 

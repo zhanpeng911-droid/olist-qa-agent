@@ -17,7 +17,7 @@
 
       <div v-for="(m, i) in messages" :key="i" class="msg" :class="m.role">
         <div v-if="m.role === 'assistant'" class="avatar ai-avatar"><Sparkles :size="15" /></div>
-        <div v-else class="avatar user-avatar">企</div>
+        <div v-else class="avatar user-avatar"><User :size="15" :stroke-width="2" /></div>
         <div class="bubble">
           <template v-if="m.role === 'user'">{{ m.text }}</template>
           <template v-else>
@@ -25,7 +25,13 @@
             <div v-if="m.running" class="running">{{ m.running }}</div>
             <MarkdownText v-if="m.text" :text="m.text" />
             <div v-if="m.summary && !m.result" class="hist-summary">{{ m.summary }}</div>
-            <ResultCard v-if="m.result && m.intent" :intent="m.intent" :d="m.result" />
+            <ResultCard
+              v-if="m.result && m.intent"
+              :intent="m.intent"
+              :d="m.result"
+              :suggestions="m.suggestions"
+              @followup="send"
+            />
             <div v-if="m.error" class="error">{{ m.error }}</div>
             <div v-if="m.steps?.length" class="steps">
               <div v-for="(s, j) in m.steps" :key="j" class="step">
@@ -37,13 +43,6 @@
               <span class="suggest-label">请问按哪个维度对比？</span>
               <button v-for="c in m.clarify" :key="c.prompt" class="suggest-chip" @click="send(c.prompt)">
                 {{ c.label }}
-              </button>
-            </div>
-            <!-- 追问胶囊 -->
-            <div v-if="m.suggestions?.length" class="suggestions">
-              <span class="suggest-label">继续追问：</span>
-              <button v-for="s in m.suggestions" :key="s" class="suggest-chip" @click="send(s)">
-                {{ s }}
               </button>
             </div>
           </template>
@@ -81,7 +80,7 @@ import { nextTick, onMounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { Delete } from '@element-plus/icons-vue'
 import {
-  AlertTriangle, ArrowRight, BarChart3, Paperclip, Search, Send, Sparkles, TrendingUp, Wrench,
+  AlertTriangle, ArrowRight, BarChart3, Paperclip, Search, Send, Sparkles, TrendingUp, User, Wrench,
 } from 'lucide-vue-next'
 import { chatStream } from '../api'
 import MarkdownText from '../components/cards/MarkdownText.vue'
@@ -89,14 +88,14 @@ import ResultCard from '../components/cards/ResultCard.vue'
 import { useSessions } from '../composables/useSessions'
 
 const route = useRoute()
-const { sessions, currentId, switchSession, getMessages, setMessages, setTitle } = useSessions()
+const { sessions, currentId, switchSession, getMessages, setMessages, setTitle, loadSessions } = useSessions()
 
 const input = ref('')
 const sending = ref(false)
 const messages = ref<any[]>([])
 const bodyEl = ref<HTMLDivElement>()
 
-// ---------- 会话消息序列化（大结果降级存摘要） ----------
+// ---------- 会话消息序列化（小结果完整存，大结果降级存摘要） ----------
 function fmtPct(v: number | undefined | null) {
   return v == null ? '—' : (v * 100).toFixed(1) + '%'
 }
@@ -114,21 +113,25 @@ function summarizeResult(intent: string, d: any): string {
   if (intent === 'statistical') return d?.conclusion || ''
   return d?.answer || ''
 }
+// 完整存储结果（供历史会话恢复表格/图表）——数据库 LONGTEXT 无大小限制，全部整份入库
 function serializeMessages(msgs: any[]) {
   return msgs.map((m) => {
     if (m.role === 'user') return { role: 'user', text: m.text }
     const s: any = { role: 'assistant', intent: m.intent, error: m.error, text: m.text || '' }
-    if (m.result) s.summary = summarizeResult(m.intent, m.result)
+    if (m.result) {
+      s.summary = summarizeResult(m.intent, m.result)
+      s.result = m.result
+    }
     return s
   })
 }
 function hydrateMessages(list: any[]): any[] {
   return list.map((m) => m.role === 'user'
     ? { role: 'user', text: m.text }
-    : { role: 'assistant', intent: m.intent, error: m.error, text: m.text, summary: m.summary, steps: [], result: null, clarify: [], suggestions: [] })
+    : { role: 'assistant', intent: m.intent, error: m.error, text: m.text, summary: m.summary, steps: [], result: m.result ?? null, clarify: [], suggestions: m.result ? suggestionsFor(m.intent) : [] })
 }
-function loadCurrent() {
-  messages.value = hydrateMessages(getMessages())
+async function loadCurrent() {
+  messages.value = hydrateMessages(await getMessages())
   scrollBottom()
 }
 
@@ -137,8 +140,7 @@ watch(currentId, () => { loadCurrent() })
 // 路由 session 参数变化（侧边栏点击 → ?session=id）也触发加载（双保险）
 watch(() => route.query.session, (sid) => {
   if (sid && sid !== currentId.value) {
-    switchSession(String(sid))
-    loadCurrent()
+    switchSession(String(sid)).then(loadCurrent)
   } else if (sid && sid === currentId.value) {
     loadCurrent()
   }
@@ -158,13 +160,28 @@ const INTENT_LABEL: Record<string, string> = {
 }
 function intentLabel(i: string) { return INTENT_LABEL[i] ?? i }
 
-function suggestionsFor(intent: string): string[] {
-  const map: Record<string, string[]> = {
-    attribution: ['各客户州的低评分率对比', '各商品品类的低评分率对比'],
-    statistical: ['查看低评分率的月度趋势', '各商品品类的低评分率对比'],
-    query: ['查看低评分率的月度趋势', '各客户州的低评分率对比'],
-    deep_validation: ['对低评分进行归因', '延迟和低评分是否相关'],
-    other: ['对低评分进行归因', '延迟和低评分是否相关'],
+function suggestionsFor(intent: string): { label: string; prompt: string; icon?: string }[] {
+  const map: Record<string, { label: string; prompt: string; icon?: string }[]> = {
+    attribution: [
+      { label: '查看各州分布', prompt: '各客户州的低评分率对比', icon: 'map' },
+      { label: '查看品类对比', prompt: '各商品品类的低评分率对比', icon: 'chart' },
+    ],
+    statistical: [
+      { label: '查看月度趋势', prompt: '查看低评分率的月度趋势', icon: 'trend' },
+      { label: '查看品类对比', prompt: '各商品品类的低评分率对比', icon: 'chart' },
+    ],
+    query: [
+      { label: '查看月度趋势', prompt: '查看低评分率的月度趋势', icon: 'trend' },
+      { label: '查看各州分布', prompt: '各客户州的低评分率对比', icon: 'map' },
+    ],
+    deep_validation: [
+      { label: '查看各州分布', prompt: '各客户州的低评分率对比', icon: 'map' },
+      { label: '查看品类对比', prompt: '各商品品类的低评分率对比', icon: 'chart' },
+    ],
+    other: [
+      { label: '对低评分进行归因', prompt: '对低评分进行归因', icon: 'spark' },
+      { label: '延迟与低评分相关吗', prompt: '延迟和低评分是否相关', icon: 'trend' },
+    ],
   }
   return map[intent] ?? map.other
 }
@@ -179,7 +196,7 @@ async function send(q?: unknown) {
   messages.value.push({ role: 'user', text: question })
   const ai: any = { role: 'assistant', steps: [], result: null, intent: '' }
   messages.value.push(ai)
-  if (firstMsg) setTitle(currentId.value, question.slice(0, 18))
+  if (firstMsg) await setTitle(currentId.value, question.slice(0, 18))
   scrollBottom()
 
   try {
@@ -227,19 +244,21 @@ function scrollBottom() {
   nextTick(() => { bodyEl.value?.scrollTo({ top: bodyEl.value.scrollHeight, behavior: 'smooth' }) })
 }
 
-onMounted(() => {
+onMounted(async () => {
   // 侧边栏传入的会话 id
+  await loadSessions()
   const sid = route.query.session as string | undefined
-  if (sid) switchSession(sid)
-  loadCurrent()
+  if (sid && sessions.value.some((s) => s.id === sid)) await switchSession(sid)
+  await loadCurrent()
   const q = route.query.q as string | undefined
   if (q && q.trim()) send(q)
 })
 </script>
 
 <style scoped>
-.chat { display: flex; flex-direction: column; height: calc(100vh - 128px); }
-.chat-body { flex: 1; overflow-y: auto; padding-right: 8px; }
+/* 悬浮输入区：绝对定位覆盖在消息之上，不挤压消息可视区 */
+.chat { position: relative; height: calc(100vh - 128px); }
+.chat-body { height: 100%; overflow-y: auto; padding: 0 8px 120px; box-sizing: border-box; }
 
 /* 空状态 */
 .empty { height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; }
@@ -285,7 +304,13 @@ onMounted(() => {
 .suggest-chip:hover { background: #EFF6FF; border-color: var(--primary); }
 
 /* 悬浮输入区 */
-.chat-input { margin-top: 14px; display: flex; flex-direction: column; align-items: center; gap: 8px; }
+.chat-input {
+  position: absolute; left: 0; right: 0; bottom: 0;
+  display: flex; flex-direction: column; align-items: center; gap: 8px;
+  padding: 14px 0 10px;
+  /* 自下而上的淡出，让消息滚动到输入区下方时自然过渡 */
+  background: linear-gradient(to top, var(--bg) 78%, rgba(244, 247, 251, 0));
+}
 .input-shell { display: flex; align-items: center; gap: 10px; width: min(760px, 100%); background: var(--card); border-radius: var(--radius-pill); padding: 8px 10px 8px 18px; box-shadow: 0 12px 32px -4px rgba(15,23,42,.08), 0 6px 18px -6px rgba(47,101,246,.12); border: 1px solid var(--border-soft); transition: box-shadow .2s ease, border-color .2s ease; }
 .input-shell:focus-within { border-color: var(--primary); box-shadow: 0 14px 34px -8px rgba(47,101,246,.26); }
 .src-tag { font-size: 11px; color: var(--text-2); background: var(--bg); padding: 4px 10px; border-radius: var(--radius-pill); white-space: nowrap; flex-shrink: 0; display: inline-flex; align-items: center; gap: 5px; }

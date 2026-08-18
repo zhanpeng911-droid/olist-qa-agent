@@ -32,6 +32,7 @@ METRIC_ALIASES = {
 
 DIMENSION_ALIASES = {
     "order_month": ("按月份", "按月", "每月", "各月", "月份走势", "月度趋势", "月度", "每月趋势", "每个月"),
+    "order_year": ("按年份", "按年", "各年", "每年", "年份", "年度", "各年份", "历年"),
     "primary_category_name": ("按品类", "各品类", "不同品类", "品类和", "商品品类", "品类"),
     "primary_payment_type": ("按支付方式", "各支付方式", "不同支付方式", "支付方式交叉"),
     "delay_bucket": ("延迟档位", "延迟分档", "各延迟档"),
@@ -45,7 +46,10 @@ DIMENSION_ALIASES = {
 }
 
 # 出现这些词说明用户期望分组/对比/趋势，但未识别出维度时视为“解析不完整”
-DIMENSION_HINTS = ("各", "对比", "按", "趋势", "分布", "不同", "分别", "分类", "哪些", "排行")
+DIMENSION_HINTS = (
+    "各", "对比", "按", "趋势", "分布", "不同", "分别", "分类", "哪些", "排行",
+    "相比", "较", "同比", "环比", "变化", "去年", "今年", "上年", "近一年",
+)
 
 METRIC_LABELS = {
     "order_count": "订单量",
@@ -66,6 +70,7 @@ METRIC_LABELS = {
 
 DIMENSION_LABELS = {
     "order_month": "月份",
+    "order_year": "年份",
     "primary_category_name": "品类",
     "primary_payment_type": "支付方式",
     "delay_bucket": "延迟分档",
@@ -132,8 +137,10 @@ def plan_query_question(question: str, semantic: SemanticLayer) -> dict:
     limit = int(rank_match.group(1)) if rank_match else (10 if ranking else 100)
     limit = min(max(limit, 1), 10000)
 
-    # 条件筛选：识别“延迟 X 天以上/以内”等数值范围 → WHERE late_days >=/<= X
+    # 条件筛选：识别“延迟 X 天以上/以内”“运费 X 块以上”等数值范围 → WHERE
     filters: dict = {}
+
+    # 延迟天数
     delay_ge = re.search(
         r"延迟\s*(\d+)\s*天?\s*(?:以上|及以上|超过|大于|至少|超)|(?:>=|≥)\s*(\d+)\s*天",
         question)
@@ -144,6 +151,36 @@ def plan_query_question(question: str, semantic: SemanticLayer) -> dict:
         filters["late_days"] = {"op": ">=", "value": int(delay_ge.group(1) or delay_ge.group(2))}
     elif delay_le:
         filters["late_days"] = {"op": "<=", "value": int(delay_le.group(1) or delay_le.group(2))}
+    # 金额类（运费/金额/价格），支持“运费 X 块以上”和“运费超过 X 元”两种语序
+    else:
+        money_ge = re.search(
+            r"(?:运费|金额|价格|支付额|货款)\s*(?:超过|大于|至少|以上|高于|不低于|>=|≥)\s*(\d+\.?\d*)\s*(?:块|元)?"
+            r"|(?:运费|金额|价格|支付额|货款)\s*(\d+\.?\d*)\s*(?:块|元)?\s*(?:以上|及以上|超过|大于|至少|高于|不低于)",
+            question)
+        money_le = re.search(
+            r"(?:运费|金额|价格|支付额|货款)\s*(?:不超过|小于|低于|以内|不大于|<=|≤)\s*(\d+\.?\d*)\s*(?:块|元)?"
+            r"|(?:运费|金额|价格|支付额|货款)\s*(\d+\.?\d*)\s*(?:块|元)?\s*(?:以内|之内|不超过|小于|低于|最多)",
+            question)
+        if money_ge:
+            v = money_ge.group(1) or money_ge.group(2)
+            filters["freight_total"] = {"op": ">=", "value": float(v)}
+        elif money_le:
+            v = money_le.group(1) or money_le.group(2)
+            filters["freight_total"] = {"op": "<=", "value": float(v)}
+
+    # 期间对比：识别“2020 年相比 2019 年”这类具体年份对比 → 按年份分组并计算差值
+    compare = None
+    years_mentioned = re.findall(r"((?:19|20)\d{2})\s*年", question)
+    if len(years_mentioned) >= 2 and any(
+        w in question for w in ("相比", "对比", "较", "同比", "环比", "变化", "涨", "跌", "提高", "降低")
+    ):
+        years: list[int] = []
+        for y in years_mentioned:
+            if int(y) not in years:
+                years.append(int(y))
+        if len(years) >= 2:
+            compare = {"years": sorted(years[:2])}
+            dimensions = ["order_year"]
 
     order_by = None
     if ranking and dimensions:
@@ -168,6 +205,7 @@ def plan_query_question(question: str, semantic: SemanticLayer) -> dict:
         "filters": filters,
         "order_by": order_by,
         "limit": limit,
+        "compare": compare,
     }
 
 
@@ -217,6 +255,84 @@ def analyze_query_question(provider: DataProvider, semantic: SemanticLayer,
             for metric in plan["metrics"]
         })
         display_rows.append(row)
+
+    # 期间对比：筛出目标两年，计算差值并生成自然语言回答
+    compare = plan.get("compare")
+    if compare and compare.get("years") and plan["dimensions"] == ["order_year"]:
+        target = {int(y) for y in compare["years"]}
+        by_year = {
+            int(raw.get("order_year")): raw for raw in result["rows"]
+            if raw.get("order_year") is not None
+        }
+        present = sorted(target & by_year.keys())
+        if len(present) == 2:
+            metric = plan["metrics"][0]
+            y_lo, y_hi = present
+            v_lo = by_year[y_lo].get(f"_m_{metric}")
+            v_hi = by_year[y_hi].get(f"_m_{metric}")
+            if v_lo is not None and v_hi is not None:
+                diff = v_hi - v_lo
+                delta_label = METRIC_LABELS.get(metric, metric)
+                compare_info = {
+                    "metric": metric,
+                    "metric_label": delta_label,
+                    "years": present,
+                    "values": {y_lo: v_lo, y_hi: v_hi},
+                    "diff": diff,
+                }
+                if metric in RATE_METRICS:
+                    diff_text = f"{diff * 100:+.2f} 个百分点"
+                    v_text = lambda y: f"{by_year[y][f'_m_{metric}'] * 100:.2f}%"
+                else:
+                    diff_text = f"{diff:+,.2f}"
+                    v_text = lambda y: f"{by_year[y][f'_m_{metric}']:,.2f}"
+                answer = (
+                    f"{y_lo} 年{delta_label} {v_text(y_lo)}，"
+                    f"{y_hi} 年{delta_label} {v_text(y_hi)}，"
+                    f"变化 {diff_text}。"
+                )
+                display_rows = [
+                    {DIMENSION_LABELS["order_year"]: str(y),
+                     delta_label: _display_metric(metric, by_year[y][f"_m_{metric}"])}
+                    for y in present
+                ]
+                return {
+                    "ok": True,
+                    "recognized": True,
+                    "incomplete": False,
+                    **plan,
+                    "rows": [by_year[y] for y in present],
+                    "display_rows": display_rows,
+                    "row_count": len(present),
+                    "compare": compare_info,
+                    "sql": result["sql"],
+                    "answer": answer,
+                    "execution_mode": "deterministic_period_compare",
+                }
+        # 目标年份在数据中缺失（如问 2020/2019，但数据只到 2018）→ 明确提示，不静默落回
+        missing = sorted(target - by_year.keys())
+        available = sorted(by_year.keys())
+        if available:
+            missing_text = "、".join(f"{y} 年" for y in missing)
+            answer = (
+                f"数据中缺少 {missing_text} 的数据，无法进行对比；"
+                f"当前数据覆盖的年份：{'、'.join(f'{y} 年' for y in available)}。"
+            )
+        else:
+            answer = f"数据中没有年份信息，无法进行期间对比。"
+        return {
+            "ok": True,
+            "recognized": True,
+            "incomplete": False,
+            **plan,
+            "rows": [],
+            "display_rows": [],
+            "row_count": 0,
+            "sql": result["sql"],
+            "answer": answer,
+            "execution_mode": "deterministic_period_compare",
+        }
+
     if not plan["dimensions"] and display_rows:
         answer = "；".join(f"{key}：{value}" for key, value in display_rows[0].items())
     else:

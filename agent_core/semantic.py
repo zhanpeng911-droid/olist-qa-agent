@@ -43,6 +43,10 @@ class SemanticLayer:
     def check_dimension(self, table: str, dim: str) -> bool:
         return dim in self.get_dimensions(table)
 
+    def get_dimension_expr(self, table: str, dim: str) -> str | None:
+        """返回维度的 SQL 表达式；纯列名维度返回 None（按原列引用）。"""
+        return self.tables[table].get("dimension_exprs", {}).get(dim)
+
     # ---- 描述（供 LLM 提示词用）----
     def describe(self, table: str) -> str:
         """生成表的指标+维度描述文本，供 ReAct 的 system prompt 注入。"""

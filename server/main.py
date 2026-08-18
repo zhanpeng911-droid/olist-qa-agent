@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import AsyncGenerator
 
 from dotenv import load_dotenv
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -32,6 +32,7 @@ from agent_core.loop import ReActLoop  # noqa: E402
 from agent_core.query_analysis import analyze_query_question, plan_query_question  # noqa: E402
 from agent_core.semantic import SemanticLayer  # noqa: E402
 from agent_core.statistical_analysis import analyze_statistical_question  # noqa: E402
+from server.session_store import SessionStore  # noqa: E402
 
 app = FastAPI(title="Olist 智能问数 Agent API", version="2.0")
 app.add_middleware(
@@ -161,6 +162,83 @@ def api_meta():
         },
         "guards": s.guards,
     })
+
+
+# ---------- 会话历史（MySQL 持久化） ----------
+_session_store: SessionStore | None = None
+
+
+def get_session_store() -> SessionStore:
+    global _session_store
+    if _session_store is None:
+        _session_store = SessionStore()
+    return _session_store
+
+
+class SessionBody(BaseModel):
+    title: str = "新对话"
+
+
+class MessagesBody(BaseModel):
+    messages: list[dict]
+
+
+@app.get("/api/sessions")
+def api_list_sessions():
+    store = get_session_store()
+    try:
+        return _json({"ok": True, "sessions": store.list_sessions()})
+    finally:
+        store.close()
+
+
+@app.post("/api/sessions")
+def api_create_session(body: SessionBody):
+    store = get_session_store()
+    try:
+        return _json({"ok": True, "session": store.create_session(body.title)})
+    finally:
+        store.close()
+
+
+@app.post("/api/sessions/{sid}/rename")
+def api_rename_session(sid: str, body: SessionBody):
+    store = get_session_store()
+    try:
+        if not store.rename_session(sid, body.title):
+            raise HTTPException(status_code=404, detail="会话不存在")
+        return {"ok": True}
+    finally:
+        store.close()
+
+
+@app.delete("/api/sessions/{sid}")
+def api_delete_session(sid: str):
+    store = get_session_store()
+    try:
+        store.delete_session(sid)
+        return {"ok": True}
+    finally:
+        store.close()
+
+
+@app.get("/api/sessions/{sid}/messages")
+def api_get_messages(sid: str):
+    store = get_session_store()
+    try:
+        return _json({"ok": True, "messages": store.get_messages(sid)})
+    finally:
+        store.close()
+
+
+@app.post("/api/sessions/{sid}/messages")
+def api_save_messages(sid: str, body: MessagesBody):
+    store = get_session_store()
+    try:
+        store.save_messages(sid, body.messages)
+        return {"ok": True}
+    finally:
+        store.close()
 
 
 # ---------- SSE 流式对话 ----------

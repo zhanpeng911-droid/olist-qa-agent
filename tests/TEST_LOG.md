@@ -647,3 +647,176 @@ uv run uvicorn server.main:app --port 8000   # http://127.0.0.1:8000
 - 会话记录仅存浏览器 localStorage，不上传后端（隐私友好）
 - 待推送 git（网络不通，本地已 commit；Markdown 渲染 + 会话历史 + 前端升级 3 个 commit）
 
+
+---
+
+## 29. 修复：年份期间对比静默降级（"2020 相比 2019 变化"返回总体单值）
+
+> 日期：2026-08-18
+> 触发：用户在对话中问"2020 年相比 2019 年，低评分率变化了多少"，系统只返回总体单值 21.07%（静默降级）
+
+### 29.1 根因（两层）
+1. **完整性检测失效**：`DIMENSION_HINTS` 只含"各/对比/按/趋势/分布…"，用户问题用"相比/变化"，两词均不在表 → `incomplete=False`，未触发 LLM 兜底，直接返回总体单值
+2. **维度字典缺"年份"**：只有 `order_month`（月份），无年份维度，即使想按年分组也无路可走
+
+### 29.2 修复（确定性优先，绝不静默降级）
+- **语义层**：`metrics_dict.yaml` 为 `mart_order_delivery` 新增 `order_year` 维度（表达式 `SUBSTR(order_month,1,4)`，MySQL/SQLite 双兼容）；`semantic.py` 加 `get_dimension_expr()`
+- **tools.py**：维度 select 支持表达式（`expr AS dim`），GROUP BY 用表达式本体（MySQL 不支持 GROUP BY 别名——曾踩坑：`GROUP BY order_year` 别名导致整表聚合、年份全 NULL）
+- **query_analysis.py**：
+  - `DIMENSION_ALIASES` 加 `order_year`（按年份/按年/各年/每年/年度…）
+  - `DIMENSION_HINTS` 扩充"相比/较/同比/环比/变化/去年/今年/上年/近一年"
+  - 新增**期间对比路径** `deterministic_period_compare`：识别"X年相比Y年"→ 按 `order_year` 分组 → 筛目标两年 → 算差值，返回自然语言回答（如"2016 年低评分率 24.62%，2017 年 20.62%，变化 -4.00 个百分点"）+ `compare` 结构化字段
+  - 目标年份在数据中缺失时（如问 2019/2020，数据只到 2018）**明确提示缺失年份与可用范围**，不静默落回
+
+### 29.3 验证
+- 函数级：MySQL + CSV 双端通过（各年份分组 / 期间对比 / 月份趋势 / 总体值回归）
+- API 级：`POST /api/query` 正确返回 `execution_mode=deterministic_period_compare`
+- SSE 对话：`intent=query → running → result(含 compare) → done` 完整事件流，answer 含变化说明
+- 回归：`tests/test_query_analysis.py + test_m1.py + test_api.py` → **28 passed**（1 条已知非致命 overflow warning）
+- 前端未消费 `compare` 字段，但 `answer` 文本随 SSE 渲染，功能完整
+
+---
+
+## 30. 修复：历史会话"智能对话以外的意图只显示少量摘要"
+
+> 日期：2026-08-18
+> 触发：用户退出后点历史对话，指标查询等意图只显示一行摘要（如"品类 security_and_services，低评分率 50.00%"），看不到完整表格
+
+### 30.1 根因
+- 会话持久化 `serializeMessages` 一律只存 `summary`（单行摘要），丢弃 `result`
+- 当初为防 attribution 405KB 大结果撑爆 localStorage 的取舍，误伤了 query/statistical 等小结果（通常几 KB～几十 KB）
+
+### 30.2 修复（web/src/views/ChatView.vue）
+- 序列化按意图区分：
+  - query / statistical 等小结果 → **完整存储 result**（历史恢复可渲染表格/图表/SQL）
+  - attribution / deep_validation 大结果 → 仍降级存摘要
+  - 兜底：任何单条结果 > 200KB（RESULT_STORE_LIMIT）也不完整存储
+- hydrate 恢复 `result: m.result ?? null`；旧会话（只有 summary）兼容显示摘要，不报错
+
+### 30.3 验证（浏览器实测）
+- 新会话发"哪个品类的低评分率最高"→ 回答完成 → 刷新 → 该会话**完整恢复表格**（品类排名 6+ 行、洞察、展开全部、SQL 明细齐全）
+- 归因历史会话 → 仍显示摘要（低评分率 21.1% · 延迟 OR 13.08），localStorage 不爆
+- `vite build` 通过
+
+---
+
+## 31. 会话历史迁移到 MySQL 数据库存储
+
+> 日期：2026-08-18
+> 需求：用户问"对话不能存在数据库里吗"——将会话历史从浏览器 localStorage 迁到数据库（存现有 olist_ecommerce 库，不迁移旧数据，全新开始）
+
+### 31.1 动机
+- localStorage 局限：约 5MB 总量、只在本机、换设备即丢；归因 405KB 大结果被迫降级存摘要
+- 数据库方案：结果 JSON 整份入库（LONGTEXT），query 等小结果可完整还原表格；跨设备保留；天然支持多用户
+
+### 31.2 实现
+- **后端** `server/session_store.py`（新建）：建表 `chat_session` / `chat_message`（幂等 DDL），SessionStore 提供 会话列表/创建/改名/删除 + 消息整批覆盖读写；result 以 JSON 存 LONGTEXT
+- **后端** `server/main.py`：新增 REST
+  - `GET/POST /api/sessions`、`POST /api/sessions/{id}/rename`、`DELETE /api/sessions/{id}`
+  - `GET/POST /api/sessions/{id}/messages`（后接保存，先清后插保证快照一致）
+- **前端** `web/src/api.ts`：新增 6 个会话 API 封装
+- **前端** `web/src/composables/useSessions.ts`（重写）：localStorage → MySQL API（方法全部 async）；无会话时自动创建默认会话保证首屏可直接发消息；请求失败降级为本地临时会话
+- **前端** 调用方 `AppLayout.vue` / `ChatView.vue`：适配 async（await 化，watch/onMounted/发送流程）
+
+### 31.3 验证
+- API 层：建会话 → 存消息（含 result JSON）→ 读消息（result 完整还原）→ 列表带 message_count → 删除，全通过
+- 浏览器实测（用户真实发消息）：query 会话 result 完整入库（678 字节含表格数据）；attribution 会话按设计存摘要；刷新后侧边栏正确恢复两个会话
+- `vite build` 通过
+- 备注：Playwright 自动化对 Element Plus v-model 有盲区（fill/type 不触发 Vue input 事件导致发送按钮禁用），真实用户手输正常
+
+### 31.4 说明
+- 旧 localStorage 数据未迁移（按需求），数据库空表全新开始
+
+---
+
+## 32. 修复：数据库会话存储后归因历史仍只显示摘要/空白
+
+> 日期：2026-08-18
+> 触发：切到数据库会话存储后，归因历史会话恢复只显示"归因分析"标签、无内容；query 历史恢复正常显示完整表格
+
+### 32.1 根因（两处）
+1. **降级规则残留**：`serializeMessages` 里 `heavy = attribution || deep_validation` 不存 result——这是 localStorage 时代为防 5MB 限制的设计。切到数据库后（LONGTEXT 无大小限制）未移除，导致归因结果仍被砍，历史恢复无完整内容
+2. **侧边栏消息数失效**：数据库化后 sessions 的 messages 懒加载（初始 []），AppLayout 用 `s.messages?.length` 恒为 0——后端 `listSessions` 已返回 `message_count` 但前端丢弃
+
+### 32.2 修复
+- **web/src/views/ChatView.vue**：`serializeMessages` 移除 heavy 降级与 RESULT_STORE_LIMIT，所有意图 result 整份入库（数据库 LONGTEXT 支持）
+- **web/src/composables/useSessions.ts**：会话对象增加 `messageCount` 字段（loadSessions 从后端读取、newSession/降级/默认会话初始化为 0、setMessages 后更新为 msgs.length）
+- **web/src/layouts/AppLayout.vue**：侧边栏消息数改显示 `s.messageCount`
+
+### 32.3 验证
+- 浏览器实测：query 历史会话（有完整 result）恢复**完整表格**（21.07% / 6.66% 指标 + 洞察 + SQL 明细按钮）✓；归因历史会话因旧数据 result 为空只显示标签（需重新触发才能完整）
+- API 实测：归因大结果（baseline/verification/factors/suggestions/display_rows）完整存取 OK
+- 侧边栏两个会话均正确显示消息数 "2" ✓
+- `vite build` 通过
+
+### 32.4 说明
+- 已存在的归因会话 result 为空（旧规则砍掉），**需重新触发归因**才能存完整 result 并在历史中完整恢复
+
+---
+
+## 33. 看板图表美学重构（按评审方案）
+
+> 日期：2026-08-18
+> 需求：按设计评审文档对标原版风格，解决"图表单调、图例挤压、缺乏设计感"
+
+### 33.1 改造内容
+- **charts.ts / barOption（客户州排行）**：加 #F1F5F9 浅灰全长圆角底槽（track）+ 青蓝→电光蓝渐变胶囊（borderRadius 9）+ 右侧大号深色百分比标签（13px/700）
+- **charts.ts / donutOption（支付构成）**：环体加粗（radius 62%→84%）+ 宽扇区环内白色百分比标注（≥12% 显示）+ 中心大数字（30px/700）+ 深蓝黑 tooltip；原 ECharts 底部单行图例移除
+- **charts.ts / areaOption（月度趋势）**：showSymbol:false 去常驻数据点（hover 动态点亮）+ smooth 0.35 贝塞尔 + 加深渐变面积（rgba(47,101,246,.25)→透明）+ 深色 tooltip（#1E2238）
+- **DashboardView.vue**：
+  - 州排行严格降序（按 low_score_rate 高→低），Top3 徽章（1/2/3，r1 渐变蓝底白字）
+  - 支付构成改 2×2 卡片化图例网格（donut-legend：色块+名称+单量+占比，灰底圆角容器）
+  - 卡片质感沿用 --shadow 弥散阴影 + 20px 圆角 + #F4F7FB 底（已达标未改）
+
+### 33.2 验证
+- `vite build` 通过
+- 浏览器实测：看板渲染正常——canvas 7 个（KPI sparkline×4 + 图表×3）、图例网格 4 项（信用卡 75% / Boleto 20% / 借记卡 1% / 代金券 3%）、Top3 徽章 3 个（1 MA / 2 AL / 3 PA）
+
+---
+
+## 34. 看板与对话最后阶段细节精修
+
+> 日期：2026-08-18
+> 需求：对看板条形图/环形图 + 对话响应卡片做细节打磨
+
+### 34.1 看板
+- **客户州条形图**：`yAxis: { inverse: true }` 确保排名第 1（MA）显示在最顶部；`xAxis: { max: 35 }` 让条形拉长充满卡片宽度 80%+，避免右侧留白
+- **支付环形图**：移除环内浮动百分比文字（label:false），环体干净饱满；底部 2×2 图例严格两列（grid-template-columns: 1fr 1fr），单量与百分比用 lg-nums 包裹、间距 8px
+
+### 34.2 对话响应卡片（ResultCard + ChatView）
+- 去除卡片下方重复纯文本"低评分率: 21.07%; 延迟率: 6.66%"，改为**加粗业务洞察结论**（conclusionText：`当前低评分率为 21.07%，整体表现处于可控区间。`，13px/600）
+- 补回卡片底部「继续追问」快捷胶囊：suggestions 结构化为 `{label, prompt, icon}`，ResultCard 底部渲染带图标的胶囊（TrendingUp/Map/BarChart3 等），点击 @followup → send 发送
+- hydrateMessages 时按 intent 自动补 suggestions（历史会话也有追问胶囊）
+- **用户头像**：顶部 + 消息区从"企"字改为浅色矢量人像（lucide User 图标，浅紫渐变 #E0E7FF→#DBEAFE + #4338CA）
+
+### 34.3 验证
+- `vite build` 通过
+- 浏览器实测（query 会话）：
+  - 卡片显示加粗结论"当前低评分率为 21.07%…"（重复纯文本已消失）
+  - 底部「继续追问」+「查看月度趋势」「查看各州分布」胶囊渲染 ✓
+  - 顶部/消息区用户头像均为 SVG 矢量图标（空文本 + svg 计数 2/1）✓
+  - 看板 Top3 徽章（1 MA 2 AL 3 PA）与 2×2 图例正常
+
+---
+
+## 35. 偏难怪题批量测试（API 直测）+ 修复两个 bug
+
+> 日期：2026-08-18
+> 方式：不再用浏览器 UI 鼠标操作（效率低且无读图能力），改为脚本直接调后端 /api/chat（SSE）批量并行测试 20 道偏难怪题，新增 tests/edge_case_probe.py 探针
+
+### 35.1 测试结果（20 题）
+- **意图路由**：订单量下降→other✓；退款率原因→other✓（正确说明无指标+给替代）；对退款原因归因→attribution✓（明确拒绝）；SP归因→attribution✓（完整结果）；**❌"帮我分析哪些因素和差评有关"→other（应 attribution）**
+- **静默降级**：2020vs2019→正确提示缺数据✓；去年今年延迟率→正确对比✓；近三年/各月/哪个品类→确定性 query✓
+- **解析器边界**：延迟>7天→2862单✓；评分≤2→12.81%✓；**❌"运费 100 块以上"→返回整体 4.16（筛选未生效，静默降级）**；SP/RJ对比✓；延迟+低评分→4677单✓
+- **统计/归因/兜底**：SP/RJ显著→两样本比例检验✓；延迟因果→正确说明"相关≠因果"✓；运营风险总结→综合回答✓
+
+### 35.2 发现并修复的 bug
+1. **金额筛选静默降级**（query_analysis.py）：只支持"延迟 X 天"，不支持"运费/金额 X 块以上"。补全运费/金额/价格的上限/下限正则（支持"运费超过 50 元"与"运费 100 块以上"两种语序），映射到 freight_total。修复后"运费100以上"→平均评分 3.66（此前错误返回整体 4.16）
+2. **"差评"漏判归因**（intent.py）：LOWSCORE_THEME 缺"差评"，"帮我分析哪些因素和差评有关"被误判 other。补入后正确判 attribution
+
+### 35.3 附带修复
+- **SessionStore 连接并发 bug**（session_store.py）：全局单例共享 pymysql 连接，并发请求下"一请求关闭、另一请求仍在用已失效连接"→ struct.error / 500。改为每次方法独立开/关连接（contextmanager），消除共享连接
+
+### 35.4 验证
+- 修复后 API 实测：差评→attribution✓、运费100以上→3.66✓、运费>50→29.71%✓、金额200以上→3.32✓、运费30以内→6.46%✓
+- 回归：tests/test_query_analysis.py + test_m1.py → 21 passed

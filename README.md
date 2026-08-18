@@ -6,10 +6,11 @@
 
 ## 当前版本状态
 
-- 页面版本：`v1.1.0`
-- 数据源：演示样本（截取数据）/ 完整业务数据库（MySQL）
-- 自动化分析范围：指标查询、双变量统计检验、低评分关联因素分析、指定变量补充验证
-- 自动测试：`133 passed, 1 skipped`
+- 页面版本：`v2.0.0`（正式 UI：FastAPI + Vue3，企业级设计体系）
+- 数据源：演示样本（截取数据）/ 完整业务数据库（MySQL 全量）
+- 自动化分析范围：指标查询、双变量统计检验、低评分关联因素分析、指定变量补充验证、年份期间对比、金额/延迟数值筛选
+- 会话历史：MySQL 数据库持久化（`chat_session` / `chat_message`），跨设备保留，结果整份入库
+- 自动测试：`133 passed, 1 skipped`（另 21 项查询/M1 回归通过）
 - 确定性核心评测：`117/117`
 - 完整数据库 M 评测：41题×3轮，完成率与正确工具路径率均为`99.19%`
 
@@ -62,6 +63,32 @@ uv run uvicorn server.main:app --port 8000   # 后端 + 前端（生产单端口
 
 DeepSeek重复评测会在每题结束后即时写入 `artifacts/evaluations/`。单题失败会记录意图、完成状态、工具路径和错误类型，并继续执行后续题目，不会终止整批评测。
 
+## 正式 UI（FastAPI + Vue3）
+
+正式界面为两页结构，替代旧的 Streamlit Demo（`ui/` 目录保留但非最终界面）：
+
+### 总览看板 `/dashboard`
+- KPI 指标栏：低评分率 / 延迟率 / 有效样本 / 平均评分，含涨跌胶囊与迷你走势
+- 图表：客户州低评分率条形图（降序 + Top3 徽章 + 浅灰底槽 + 渐变胶囊）、支付方式环形图（加粗环体 + 中心大数字 + 2×2 卡片化图例）、月度趋势面积图（平滑曲线 + 深色 tooltip）
+
+### 智能对话 `/chat`
+- SSE 流式：`intent → running → result/step → answer → done`
+- 意图路由：指标查询 / 统计检验 / 归因分析 / 深度验证 / 智能对话（LLM 兜底）
+- 结果卡片：归因 → 优先级表格 + OR 森林图 + 建议；统计 → 方法 / p 值 / 效应量；查询 → 指标卡 + 表格 + 来源 SQL
+- 会话管理：侧边栏新建/切换/删除 + 消息数；历史会话存 MySQL 数据库
+- 追问胶囊：卡片底部「查看月度趋势 / 查看各州分布」快捷追问
+
+### 会话历史（MySQL 持久化）
+- 表：`chat_session`（会话）+ `chat_message`（消息，结果以 JSON 存 LONGTEXT）
+- 首次启动自动建表；`useSessions` 从后端 API 读写，不再依赖 localStorage
+- 结果整份入库：query 等小结果恢复历史可还原完整表格；归因大结果也可完整存储
+
+### 偏难怪题探针
+`tests/edge_case_probe.py` 可直接调后端 `/api/chat` 批量测自然语言问题（intent / execution / answer），用于回归与验收，例：
+```powershell
+uv run python tests/edge_case_probe.py "运费 100 块以上的订单平均评分" "哪个品类容易给低分" "2020 年相比 2019 年低评分率变化"
+```
+
 ## 接入 DeepSeek API
 
 ```powershell
@@ -96,24 +123,36 @@ olist-qa-agent/
 │  ├─ data_provider.py       # 数据访问抽象（演示样本/完整MySQL数据库）
 │  ├─ statistical_analysis.py# 统计入口（兼容现有调用）
 │  ├─ bivariate_analysis.py  # 任意两个受控业务变量的规划与检验
-│  ├─ query_analysis.py      # 常见指标/分组/排名的确定性取数
+│  ├─ query_analysis.py      # 常见指标/分组/排名/筛选/期间对比的确定性取数
 │  ├─ low_score_attribution.py # 低评分单变量筛选 + 共线性处理 + 多变量Logistic
 │  ├─ deep_validation.py     # 指定变量补充验证 + 线路跨时间验证
 │  ├─ tools.py               # 工具层：query_mart / top_n 等
 │  ├─ intent.py              # 意图识别骨架
 │  ├─ llm.py                 # 大模型客户端（DeepSeek / 测试替身）
 │  └─ loop.py                # 自建 ReAct 循环
+├─ server/
+│  ├─ main.py                # FastAPI 路由 + SSE 对话 + 静态托管（正式 UI 后端）
+│  └─ session_store.py       # 会话历史 MySQL 存取（chat_session / chat_message）
+├─ semantics/
+│  └─ metrics_dict.yaml      # 语义字典（唯一真相源，锁死口径）
+├─ web/                      # 正式 UI 前端（Vue3 + Vite + TS + Element Plus + ECharts）
+│  └─ src/
+│     ├─ views/              # ChatView / DashboardView
+│     ├─ layouts/            # AppLayout（侧边栏 + 顶部栏）
+│     ├─ components/         # ResultCard / DataTable / MarkdownText / charts
+│     └─ composables/        # useSessions（会话状态，后端持久化）
 ├─ docs/
 │  ├─ design/                # 架构方案、框架评估与变更设计
-│  └─ guides/                # 部署、协作与故障分析
+│  └─ guides/                # 部署、协作、故障分析、交接说明
 ├─ scripts/                  # 启动辅助脚本
-├─ ui/                       # Streamlit 页面
+├─ ui/                       # Streamlit 页面（⚠ 已弃用，非最终 UI）
 └─ tests/
    ├─ eval_questions.yml     # 117 项确定性核心评测
    ├─ model_eval_questions.yml # 41 个真实表达问题
    ├─ manual_acceptance_questions.md # 完整数据库页面验收清单
+   ├─ edge_case_probe.py     # 偏难怪题批量探针（直接调 /api/chat）
    ├─ run_model_eval.py      # DeepSeek重复稳定性与延迟评测
-   ├─ TEST_LOG.md            # 测试记录台账
+   ├─ TEST_LOG.md            # 测试记录台账（§1–§35）
    └─ test_m1.py             # 对账 + 端到端测试
 ```
 
@@ -184,14 +223,18 @@ uv run python run.py --source mysql "对低评分进行归因"
 
 - 当前自动化关联因素分析只支持“是否低评分（1–3分）”作为目标变量。
 - Mart不含评价正文、商品破损、错发、客服沟通、承运商和天气等信息，仍存在残余混杂与原因缺口。
-- 全量低评分关联因素分析单次约88秒；应优先考虑结果缓存、重复特征提取复用和模型矩阵缓存。
+- 全量低评分关联因素分析单次约88秒；后端已有 24h 结果缓存；应优先考虑重复特征提取复用和模型矩阵缓存。
 - 8/41题存在调用签名波动，主要是DeepSeek偶尔附加订单量、低评分数等非必要辅助指标；目标指标和分组维度仍正确。
 - 统计显著只说明观察性关联，不代表因果；系统不自动生成责任归属或治理策略。
+- **正式 UI 依赖 MySQL 服务运行**：会话历史、看板、对话取数都走数据库，MySQL 未启动会导致 500。
+- **历史会话不自动补全**：会话数据库化之前（localStorage 时代）存的归因会话 result 为空，重新提问才完整。
+- **前端开发模式访问用 `http://localhost:5173`**（Vite 绑定 IPv6），`127.0.0.1:5173` 不可达。
 
 ## 文档入口
 
 - 文档索引：[`docs/README.md`](docs/README.md)
 - 本地部署与数据源切换：[`docs/guides/本地部署与使用说明.md`](docs/guides/本地部署与使用说明.md)
+- 交接说明（最近阶段工作）：[`docs/guides/交接说明-最近阶段工作.md`](docs/guides/交接说明-最近阶段工作.md)
 - 手工验收问题：[`tests/manual_acceptance_questions.md`](tests/manual_acceptance_questions.md)
 - 自动测试记录：[`tests/TEST_LOG.md`](tests/TEST_LOG.md)
 - M评测范围与判定标准：[`tests/benchmark_questions.md`](tests/benchmark_questions.md)
@@ -204,3 +247,7 @@ uv run python run.py --source mysql "对低评分进行归因"
 - M4（输出与评测）：调整后仍显著变量的分布/对象明细，策略输出关闭 + 117 项确定性核心评测 ✅
 - 稳定性评测：41 个真实表达问题，可配置题号和重复次数并输出 JSON 报告 ✅
 - 接入完整 MySQL 数据库：`MySQLProvider` 已实现；页面输入密码后读取三张全量分析宽表 ✅
+- 正式 UI（FastAPI + Vue3）：看板 + 对话 + SSE 流式 + 结果卡片，替代 Streamlit Demo ✅
+- 会话历史 MySQL 持久化：跨设备保留、结果整份入库、侧边栏会话管理 ✅
+- 看板/对话高质感重构：图表美学 + Top3 徽章 + 2×2 图例 + 追问胶囊 + 矢量头像 ✅
+- 年份期间对比 / 金额延迟筛选 / 偏难怪题批量探针与回归 ✅

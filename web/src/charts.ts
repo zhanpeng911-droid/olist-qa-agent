@@ -1,62 +1,84 @@
 import * as echarts from 'echarts'
 
-/** 平滑面积图（青蓝渐变 → 透明） */
+/** 平滑面积图（青蓝渐变 → 透明）：去常驻数据点，hover 动态点亮 */
 export function areaOption(x: string[], y: number[], name = ''): any {
   return {
-    tooltip: { trigger: 'axis', backgroundColor: '#1E293B', textStyle: { color: '#fff' } },
+    tooltip: {
+      trigger: 'axis', backgroundColor: '#1E2238', borderWidth: 0, padding: [10, 14],
+      textStyle: { color: '#fff', fontSize: 12 },
+      axisPointer: { type: 'line', lineStyle: { color: 'rgba(255,255,255,.25)' } },
+    },
     grid: { left: 44, right: 20, top: 20, bottom: 28 },
     xAxis: { type: 'category', data: x, axisLine: { lineStyle: { color: '#E2E8F0' } }, axisLabel: { color: '#94A3B8' } },
     yAxis: { type: 'value', axisLabel: { color: '#94A3B8', formatter: '{value}%' }, splitLine: { lineStyle: { color: '#F1F5F9' } } },
     series: [{
-      name, type: 'line', smooth: true, symbol: 'circle', symbolSize: 7,
+      name, type: 'line', smooth: 0.35, symbol: 'circle', symbolSize: 7,
+      showSymbol: false,   // 平时隐藏数据点，hover 动态点亮
+      hoverAnimation: true,
       data: y.map(v => +(v * 100).toFixed(1)),
       lineStyle: { width: 3, color: new echarts.graphic.LinearGradient(0, 0, 1, 0, [{ offset: 0, color: '#00C5FF' }, { offset: 1, color: '#2F65F6' }]) },
       itemStyle: { color: '#2F65F6' },
       areaStyle: {
         color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
-          { offset: 0, color: 'rgba(47,101,246,.28)' },
-          { offset: 1, color: 'rgba(0,197,255,0)' },
+          { offset: 0, color: 'rgba(47,101,246,.25)' },
+          { offset: 1, color: 'rgba(47,101,246,0)' },
         ]),
       },
     }],
   }
 }
 
-/** 横向条形图（排名），右侧带百分比标签 */
-export function barOption(labels: string[], values: number[], name = ''): any {
+/** 横向条形图（排行榜）：浅灰底槽 + 胶囊圆角 + 青蓝渐变 + 右侧大号百分比 */
+export function barOption(labels: string[], values: number[], name = '', opts: { max?: number } = {}): any {
+  const display = values.map(v => +(v * 100).toFixed(1))
   return {
-    tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' }, backgroundColor: '#1E293B', textStyle: { color: '#fff' } },
-    grid: { left: 90, right: 52, top: 12, bottom: 24 },
-    xAxis: { type: 'value', axisLabel: { color: '#94A3B8', formatter: '{value}%' }, splitLine: { lineStyle: { color: '#F1F5F9' } } },
-    yAxis: { type: 'category', data: labels, axisLabel: { color: '#64748B' }, axisLine: { show: false }, axisTick: { show: false } },
-    series: [{
-      name, type: 'bar', barWidth: 16, data: values.map(v => +(v * 100).toFixed(1)),
-      label: { show: true, position: 'right', color: '#64748B', fontSize: 12, fontWeight: 600, formatter: '{c}%' },
-      itemStyle: {
-        borderRadius: [0, 8, 8, 0],
-        color: new echarts.graphic.LinearGradient(0, 0, 1, 0, [{ offset: 0, color: '#38BDF8' }, { offset: 1, color: '#2F65F6' }]),
+    tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' }, backgroundColor: '#1E2238', textStyle: { color: '#fff' } },
+    grid: { left: 90, right: 56, top: 12, bottom: 24 },
+    xAxis: { type: 'value', max: opts.max, axisLabel: { color: '#94A3B8', formatter: '{value}%' }, splitLine: { lineStyle: { color: '#F1F5F9' } } },
+    yAxis: { type: 'category', inverse: true, data: labels, axisLabel: { color: '#64748B' }, axisLine: { show: false }, axisTick: { show: false } },
+    series: [
+      // 底槽：极浅灰全长圆角轨道
+      {
+        name: '', type: 'bar', barWidth: 18, barGap: '-100%', silent: true,
+        data: display.map(() => 100),
+        itemStyle: { color: '#F1F5F9', borderRadius: 9 },
       },
-    }],
+      // 前景：青蓝 → 电光蓝渐变胶囊
+      {
+        name, type: 'bar', barWidth: 18, data: display,
+        label: { show: true, position: 'right', color: '#0F172A', fontSize: 13, fontWeight: 700, formatter: '{c}%' },
+        itemStyle: {
+          borderRadius: 9,
+          color: new echarts.graphic.LinearGradient(0, 0, 1, 0, [{ offset: 0, color: '#00C5FF' }, { offset: 1, color: '#2F65F6' }]),
+        },
+      },
+    ],
   }
 }
 
-/** 环形图：中心核心数字 + 业务中文图例 */
-export function donutOption(labels: string[], values: number[], centerText?: string): any {
+/** 环形图：加粗圆角环体 + 中心大数字 + 次项白字标注（图例由 HTML 网格承载） */
+export function donutOption(labels: string[], values: number[], centerNumber?: string | number): any {
+  const total = values.reduce((a, b) => a + b, 0)
   return {
-    tooltip: { trigger: 'item', backgroundColor: '#1E293B', textStyle: { color: '#fff' }, formatter: '{b}: {c}%' },
-    legend: { bottom: 0, textStyle: { color: '#64748B', fontSize: 12 }, itemWidth: 10, itemHeight: 10 },
-    graphic: centerText
-      ? [
-          { type: 'text', left: 'center', top: '38%', style: { text: centerText, textAlign: 'center', fill: '#0F172A', fontSize: 26, fontWeight: 700 } },
-          { type: 'text', left: 'center', top: '52%', style: { text: '有效样本', textAlign: 'center', fill: '#94A3B8', fontSize: 11 } },
-        ]
-      : [],
+    tooltip: {
+      trigger: 'item', backgroundColor: '#1E2238', textStyle: { color: '#fff' },
+      formatter: (p: any) => `${p.name}<br/>${p.value.toLocaleString()} 单 (${((p.value / total) * 100).toFixed(0)}%)`,
+    },
+    legend: { show: false },   // 图例改由页面 HTML 2×2 网格渲染
+    graphic: [
+      // 中心核心大数字（总低评订单数）
+      { type: 'text', left: 'center', top: '36%', style: { text: Number(centerNumber ?? total).toLocaleString(), textAlign: 'center', fill: '#0F172A', fontSize: 30, fontWeight: 700 } },
+      { type: 'text', left: 'center', top: '52%', style: { text: '低评订单 · 有效样本', textAlign: 'center', fill: '#64748B', fontSize: 12 } },
+    ],
     series: [{
-      type: 'pie', radius: ['58%', '78%'], center: ['50%', '45%'],
-      avoidLabelOverlap: true, itemStyle: { borderRadius: 6, borderColor: '#fff', borderWidth: 3 },
-      label: { show: false }, emphasis: { label: { show: true, fontWeight: 700 } },
+      type: 'pie', radius: ['62%', '84%'], center: ['50%', '47%'],
+      avoidLabelOverlap: true,
+      itemStyle: { borderRadius: 6, borderColor: '#fff', borderWidth: 3 },
+      label: { show: false },   // 环体干净：不印浮动百分比文字
+      labelLine: { show: false },
+      emphasis: { label: { show: false } },
       data: labels.map((n, i) => ({ name: n, value: values[i] })),
-      color: ['#2F65F6', '#38BDF8', '#00C5FF', '#10B981', '#F59E0B', '#F43F5E', '#8B5CF6'],
+      color: ['#2F65F6', '#00C5FF', '#38BDF8', '#10B981', '#F59E0B', '#F43F5E', '#8B5CF6'],
     }],
   }
 }

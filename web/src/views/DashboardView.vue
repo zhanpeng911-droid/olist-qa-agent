@@ -33,14 +33,29 @@
       <!-- 图表区 -->
       <div class="chart-grid">
         <div class="s-card chart-card">
-          <h3 class="s-title">客户州 · 低评分率</h3>
+          <h3 class="s-title">客户州 · 低评分率
+            <span v-if="stateRanks.length" class="rank-badges">
+              <span v-for="(s, i) in stateRanks" :key="s" class="rank-badge" :class="`r${i + 1}`">{{ i + 1 }} {{ s }}</span>
+            </span>
+          </h3>
           <BaseChart v-if="stateBar" :option="stateBar" height="260px" />
           <el-empty v-else description="样本不足，无州级分组数据" :image-size="60" />
         </div>
         <div class="s-card chart-card">
           <h3 class="s-title">低评分订单 · 支付方式构成</h3>
-          <BaseChart v-if="payDonut" :option="payDonut" height="260px" />
+          <BaseChart v-if="payDonut" :option="payDonut" height="230px" />
           <el-empty v-else description="样本不足，无支付方式分组" :image-size="60" />
+          <!-- 2×2 图例网格（卡片化，拒绝单行横排挤压） -->
+          <div v-if="payLegend.length" class="donut-legend">
+            <div v-for="(lg, i) in payLegend" :key="lg.label" class="lg-item">
+              <span class="lg-dot" :style="{ background: lg.color }"></span>
+              <span class="lg-name">{{ lg.label }}</span>
+              <span class="lg-nums">
+                <span class="lg-count">{{ lg.count }}</span>
+                <span class="lg-pct">{{ lg.pct }}</span>
+              </span>
+            </div>
+          </div>
         </div>
         <div class="s-card chart-card wide">
           <h3 class="s-title">低评分率 · 月度趋势</h3>
@@ -124,15 +139,29 @@ const kpis = computed(() => {
 })
 
 const stateBar = computed(() => {
-  const gs = groupsOf('customer_state').slice(0, 8)
+  const gs = groupsOf('customer_state')
+    .slice()
+    .sort((a: any, b: any) => (b.low_score_rate ?? 0) - (a.low_score_rate ?? 0))
+    .slice(0, 8)
   if (!gs.length) return null
-  return barOption(gs.map((g: any) => g.value), gs.map((g: any) => g.low_score_rate), '低评分率')
+  return barOption(gs.map((g: any) => g.value), gs.map((g: any) => g.low_score_rate), '低评分率', { max: 35 })
+})
+
+// Top3 排行徽章（与条形图降序一致）
+const stateRanks = computed(() => {
+  const gs = groupsOf('customer_state')
+    .slice()
+    .sort((a: any, b: any) => (b.low_score_rate ?? 0) - (a.low_score_rate ?? 0))
+    .slice(0, 3)
+  return gs.map((g: any) => g.value)
 })
 
 const PAY_LABEL: Record<string, string> = {
   credit_card: '信用卡支付', boleto: 'Boleto 现金券', voucher: '代金券',
   debit_card: '借记卡', not_defined: '未定义',
 }
+// 与 charts.ts donutOption 的 color 数组保持一致，供 HTML 图例取色
+const DONUT_COLORS = ['#2F65F6', '#00C5FF', '#38BDF8', '#10B981', '#F59E0B', '#F43F5E', '#8B5CF6']
 
 // 低评分订单的支付方式构成（计数占比，凑满 100%）
 const payDonut = computed(() => {
@@ -141,11 +170,21 @@ const payDonut = computed(() => {
   const total = gs.reduce((s, g) => s + (g.low_score_count ?? 0), 0)
   if (!total) return null
   const values = gs.map((g: any) => g.low_score_count ?? 0)
-  const labels = gs.map((g: any) => {
-    const share = ((g.low_score_count ?? 0) / total * 100).toFixed(0)
-    return `${PAY_LABEL[g.value] ?? g.value} ${g.low_score_count ?? 0} 单 (${share}%)`
-  })
+  const labels = gs.map((g: any) => PAY_LABEL[g.value] ?? g.value)
   return donutOption(labels, values, String(total))
+})
+
+// 2×2 卡片化图例数据（名称 / 单量 / 占比 / 色块）
+const payLegend = computed(() => {
+  const gs = groupsOf('primary_payment_type').slice(0, 6)
+  const total = gs.reduce((s, g) => s + (g.low_score_count ?? 0), 0)
+  if (!total) return []
+  return gs.map((g: any, i: number) => ({
+    label: PAY_LABEL[g.value] ?? g.value,
+    count: (g.low_score_count ?? 0).toLocaleString(),
+    pct: `${(((g.low_score_count ?? 0) / total) * 100).toFixed(0)}%`,
+    color: DONUT_COLORS[i % DONUT_COLORS.length],
+  }))
 })
 
 // 过滤冷启动小样本月（如 2016-10 仅 2 单），再画趋势
@@ -195,6 +234,32 @@ onMounted(async () => {
 .kpi-spark { height: 34px; }
 .chart-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
 .chart-card.wide { grid-column: 1 / -1; }
+
+/* 州排行 Top3 徽章（浅蓝底深蓝字） */
+.s-title { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.rank-badges { display: inline-flex; align-items: center; gap: 6px; }
+.rank-badge {
+  font-size: 11px; font-weight: 700; color: #2563EB;
+  background: #EFF6FF; border: 1px solid rgba(47,101,246,.15);
+  padding: 2px 9px; border-radius: var(--radius-pill);
+}
+.rank-badge.r1 { color: #fff; background: linear-gradient(135deg, #2F65F6, #00C5FF); border: none; }
+.rank-badge.r2 { color: #4338CA; background: #EEF2FF; }
+.rank-badge.r3 { color: #0369A1; background: #E0F2FE; }
+
+/* 支付方式 2×2 卡片化图例网格（严格两列对齐） */
+.donut-legend {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 8px 20px;
+  margin-top: 12px; padding: 12px 14px;
+  background: var(--bg); border-radius: var(--radius-md);
+}
+.lg-item { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.lg-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+.lg-name { font-size: 12px; color: var(--text-2); flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.lg-nums { display: flex; align-items: baseline; gap: 8px; flex-shrink: 0; }
+.lg-count { font-size: 12px; font-weight: 700; color: var(--text-1); white-space: nowrap; }
+.lg-pct { font-size: 12px; font-weight: 600; color: var(--text-3); white-space: nowrap; }
+
 .notice-bar {
   display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
   margin-top: 20px; padding: 10px 16px;
