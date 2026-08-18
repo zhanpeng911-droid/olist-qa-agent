@@ -30,8 +30,7 @@ flowchart LR
 
 ## 快速开始
 
-Windows 本地使用：首次双击 `安装环境.bat`，之后双击 `启动Agent.bat`。
-浏览器打开 `http://localhost:8501`，默认数据源为从三张完整分析宽表截取的演示样本。
+正式 UI 推荐后端 + 前端开发模式（或生产单端口）启动，详见下方"正式 UI"章节。
 
 ```powershell
 # 1. 初始化依赖（自动建 .venv）
@@ -52,10 +51,7 @@ uv run python tests/run_model_eval.py --source mysql --repeat 3
 # 5. 命令行交互（未配置 key 时使用内置示例响应检查流程）
 uv run python run.py "请对低评分进行归因分析"
 
-# 6. 启动网页界面（Streamlit Demo，⚠ 非最终 UI）
-uv run streamlit run ui/app.py   # 浏览器打开 http://localhost:8501
-
-# 7. 正式 UI（FastAPI + Vue3，企业级设计体系）
+# 6. 正式 UI（FastAPI + Vue3，企业级设计体系）
 uv run uvicorn server.main:app --port 8000   # 后端 + 前端（生产单端口）
 # 前端开发模式：cd web && npm install && npm run dev（proxy /api → :8000）
 # 前端构建：cd web && npm run build（产物由后端自动托管）
@@ -65,7 +61,7 @@ DeepSeek重复评测会在每题结束后即时写入 `artifacts/evaluations/`�
 
 ## 正式 UI（FastAPI + Vue3）
 
-正式界面为两页结构，替代旧的 Streamlit Demo（`ui/` 目录保留但非最终界面）：
+正式界面为两页结构：
 
 ### 总览看板 `/dashboard`
 - KPI 指标栏：低评分率 / 延迟率 / 有效样本 / 平均评分，含涨跌胶囊与迷你走势
@@ -145,7 +141,6 @@ olist-qa-agent/
 │  ├─ design/                # 架构方案、框架评估与变更设计
 │  └─ guides/                # 部署、协作、故障分析、交接说明
 ├─ scripts/                  # 启动辅助脚本
-├─ ui/                       # Streamlit 页面（⚠ 已弃用，非最终 UI）
 └─ tests/
    ├─ eval_questions.yml     # 117 项确定性核心评测
    ├─ model_eval_questions.yml # 41 个真实表达问题
@@ -247,7 +242,7 @@ uv run python run.py --source mysql "对低评分进行归因"
 - M4（输出与评测）：调整后仍显著变量的分布/对象明细，策略输出关闭 + 117 项确定性核心评测 ✅
 - 稳定性评测：41 个真实表达问题，可配置题号和重复次数并输出 JSON 报告 ✅
 - 接入完整 MySQL 数据库：`MySQLProvider` 已实现；页面输入密码后读取三张全量分析宽表 ✅
-- 正式 UI（FastAPI + Vue3）：看板 + 对话 + SSE 流式 + 结果卡片，替代 Streamlit Demo ✅
+- 正式 UI（FastAPI + Vue3）：看板 + 对话 + SSE 流式 + 结果卡片 ✅
 - 会话历史 MySQL 持久化：跨设备保留、结果整份入库、侧边栏会话管理 ✅
 - 看板/对话高质感重构：图表美学 + Top3 徽章 + 2×2 图例 + 追问胶囊 + 矢量头像 ✅
 - 年份期间对比 / 金额延迟筛选 / 偏难怪题批量探针与回归 ✅
