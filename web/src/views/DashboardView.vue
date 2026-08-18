@@ -227,6 +227,7 @@ onMounted(async () => {
 </script>
 
 <style scoped>
+.dashboard { flex: 1; overflow-y: auto; min-height: 0; }
 .kpi-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 20px; margin-bottom: 24px; }
 .kpi-top { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
 .kpi-label { font-size: 13px; color: var(--text-2); font-weight: 500; }

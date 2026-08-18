@@ -1,5 +1,6 @@
 <template>
-  <div class="chat">
+  <div class="chat-card">
+    <!-- 顶部消息滚动区 -->
     <div class="chat-body" ref="bodyEl">
       <!-- 空状态：场景化提问矩阵 -->
       <div v-if="!messages.length" class="empty">
@@ -15,7 +16,7 @@
         </div>
       </div>
 
-      <div v-for="(m, i) in messages" :key="i" class="msg" :class="m.role">
+      <div v-for="(m, i) in messages" :key="i" class="msg" :class="m.role" :ref="(el: any) => setMsgRef(el, i)">
         <div v-if="m.role === 'assistant'" class="avatar ai-avatar"><Sparkles :size="15" /></div>
         <div v-else class="avatar user-avatar"><User :size="15" :stroke-width="2" /></div>
         <div class="bubble">
@@ -50,7 +51,7 @@
       </div>
     </div>
 
-    <!-- 悬浮输入区 -->
+    <!-- 底部输入区（与滚动区物理隔离） -->
     <div class="chat-input">
       <div class="input-shell">
         <span class="src-tag"><Paperclip :size="12" /> Olist 数据</span>
@@ -94,6 +95,12 @@ const input = ref('')
 const sending = ref(false)
 const messages = ref<any[]>([])
 const bodyEl = ref<HTMLDivElement>()
+const msgEls: (HTMLElement | null)[] = []
+
+// 记录最后一条消息元素，供 scrollIntoView 平滑跟随
+function setMsgRef(el: any, i: number) {
+  msgEls[i] = el as HTMLElement | null
+}
 
 // ---------- 会话消息序列化（小结果完整存，大结果降级存摘要） ----------
 function fmtPct(v: number | undefined | null) {
@@ -241,7 +248,14 @@ function clear() {
 }
 
 function scrollBottom() {
-  nextTick(() => { bodyEl.value?.scrollTo({ top: bodyEl.value.scrollHeight, behavior: 'smooth' }) })
+  nextTick(() => {
+    const last = msgEls[messages.value.length - 1]
+    if (last) {
+      last.scrollIntoView({ behavior: 'smooth', block: 'end' })
+    } else {
+      bodyEl.value?.scrollTo({ top: bodyEl.value.scrollHeight, behavior: 'smooth' })
+    }
+  })
 }
 
 onMounted(async () => {
@@ -256,9 +270,18 @@ onMounted(async () => {
 </script>
 
 <style scoped>
-/* 悬浮输入区：绝对定位覆盖在消息之上，不挤压消息可视区 */
-.chat { position: relative; height: calc(100vh - 128px); }
-.chat-body { height: 100%; overflow-y: auto; padding: 0 8px 120px; box-sizing: border-box; }
+/* 主对话大容器：统一纯白底 + 大圆角 + 单一滚动区（输入框收纳在卡片内） */
+.chat-card {
+  display: flex; flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  background: #fff;
+  border-radius: 20px;
+  box-shadow: 0 10px 30px -5px rgba(15, 23, 42, 0.04), 0 4px 6px -2px rgba(15, 23, 42, 0.02);
+  border: 1px solid rgba(226, 232, 240, 0.8);
+  overflow: hidden;
+}
+.chat-body { flex: 1; overflow-y: auto; padding: 24px; padding-bottom: 120px; box-sizing: border-box; }
 
 /* 空状态 */
 .empty { height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; }
@@ -303,15 +326,26 @@ onMounted(async () => {
 .suggest-chip { border: 1px solid var(--border-soft); background: #F8FAFF; color: var(--primary); font-size: 12px; padding: 6px 12px; border-radius: var(--radius-pill); cursor: pointer; transition: all .18s ease; }
 .suggest-chip:hover { background: #EFF6FF; border-color: var(--primary); }
 
-/* 悬浮输入区 */
+/* 底部输入栏：flex-shrink-0 固定在白卡片内部底部，无断层 */
 .chat-input {
-  position: absolute; left: 0; right: 0; bottom: 0;
+  flex-shrink: 0;
   display: flex; flex-direction: column; align-items: center; gap: 8px;
-  padding: 14px 0 10px;
-  /* 自下而上的淡出，让消息滚动到输入区下方时自然过渡 */
-  background: linear-gradient(to top, var(--bg) 78%, rgba(244, 247, 251, 0));
+  padding: 16px 24px 18px;
+  background: #fff;
+  border-top: 1px solid rgba(226, 232, 240, 0.6);
 }
-.input-shell { display: flex; align-items: center; gap: 10px; width: min(760px, 100%); background: var(--card); border-radius: var(--radius-pill); padding: 8px 10px 8px 18px; box-shadow: 0 12px 32px -4px rgba(15,23,42,.08), 0 6px 18px -6px rgba(47,101,246,.12); border: 1px solid var(--border-soft); transition: box-shadow .2s ease, border-color .2s ease; }
+.input-shell {
+  display: flex; align-items: center; gap: 10px;
+  width: min(760px, 100%);
+  background: #F8FAFC;
+  border-radius: 9999px;
+  padding: 8px 10px 8px 18px;
+  box-shadow: 0 4px 10px -2px rgba(15, 23, 42, 0.06);
+  border: 1px solid rgba(226, 232, 240, 0.8);
+  transition: box-shadow .2s ease, border-color .2s ease, background .2s ease;
+}
+.input-shell:hover { background: #F1F5F9; }
+.input-shell:focus-within { background: #fff; border-color: #3B82F6; box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.15); }
 .input-shell:focus-within { border-color: var(--primary); box-shadow: 0 14px 34px -8px rgba(47,101,246,.26); }
 .src-tag { font-size: 11px; color: var(--text-2); background: var(--bg); padding: 4px 10px; border-radius: var(--radius-pill); white-space: nowrap; flex-shrink: 0; display: inline-flex; align-items: center; gap: 5px; }
 .chat-field :deep(.el-input__wrapper) { box-shadow: none !important; background: transparent; padding: 0; }

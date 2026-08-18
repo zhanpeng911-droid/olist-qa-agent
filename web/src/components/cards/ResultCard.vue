@@ -92,7 +92,7 @@
           <button :class="{ on: view === 'table' }" @click="view = 'table'"><Table2 :size="13" /> 表格</button>
           <button :class="{ on: view === 'chart' }" @click="view = 'chart'"><BarChart3 :size="13" /> 图表</button>
         </div>
-        <DataTable v-if="view === 'table'" :rows="d.display_rows" :value-key="groupValueKey" show-rank />
+        <DataTable v-if="view === 'table'" :rows="sortedRows" :value-key="groupValueKey" :show-rank="!isTimeline" />
         <BaseChart v-else-if="groupChart" :option="groupChart" height="280px" />
       </template>
 
@@ -204,6 +204,26 @@ function parseNum(v: any): number | null {
   return isNaN(n) ? null : n
 }
 
+// 是否是时间线（月份）维度：时间正序展示，不显示排名徽章
+const isTimeline = computed(() => (props.d?.dimensions ?? []).includes('order_month'))
+
+// 排序后的展示行：
+// - 排名表（品类/州等）→ 按数值列降序，30.35% 排第 1
+// - 时间线（月份）→ 按时间正序
+const sortedRows = computed(() => {
+  const rows = props.d?.display_rows ?? []
+  if (!rows.length || !groupValueKey.value) return rows
+  const vk = groupValueKey.value
+  const copy = rows.slice()
+  if (isTimeline.value) {
+    return copy.sort((a: any, b: any) => {
+      const dim = Object.keys(a).find(k => k !== vk) ?? ''
+      return String(a[dim]).localeCompare(String(b[dim]))
+    })
+  }
+  return copy.sort((a: any, b: any) => (parseNum(b[vk]) ?? -1) - (parseNum(a[vk]) ?? -1))
+})
+
 // 洞察摘要金句（分组结果：最高/最低）
 const summary = computed(() => {
   if (props.intent === 'attribution') {
@@ -243,11 +263,11 @@ const conclusionText = computed(() => {
   return texts
 })
 
-// 分组图表（横向条形）
+// 分组图表（横向条形，与表格同序）
 const groupChart = computed(() => {
   if (!hasTable.value || !groupValueKey.value) return null
   const vk = groupValueKey.value
-  const rows = props.d.display_rows
+  const rows = sortedRows.value
   const dimKey = Object.keys(rows[0]).find(k => k !== vk) ?? ''
   const labels = rows.slice(0, 10).map(r => String(r[dimKey]))
   const values = rows.slice(0, 10).map(r => (parseNum(r[vk]) ?? 0) / 100)

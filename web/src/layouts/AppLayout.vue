@@ -271,5 +271,6 @@ onMounted(async () => {
 }
 .user-hello { font-size: 11px; color: var(--text-3); line-height: 1.3; }
 
-.content { flex: 1; overflow-y: auto; padding: 28px 32px; }
+/* 页面容器：禁止外层滚动（各页面内部自行滚动），消除双滚动条 */
+.content { flex: 1; overflow: hidden; padding: 28px 32px; display: flex; flex-direction: column; min-height: 0; }
 </style>
