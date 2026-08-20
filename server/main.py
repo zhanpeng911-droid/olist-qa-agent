@@ -16,14 +16,21 @@ from typing import AsyncGenerator
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 ROOT = Path(__file__).resolve().parent.parent
 load_dotenv(ROOT / ".env")
 
-from agent_core.attribution import run_attribution  # noqa: E402
+from agent_core.attribution import (  # noqa: E402
+    ORDER_COUNT_METRIC,
+    ORDER_TABLE,
+    build_baseline,
+    run_attribution,
+    screen_factors,
+)
 from agent_core.data_provider import MySQLProvider, ProjectCsvProvider  # noqa: E402
 from agent_core.deep_validation import analyze_deep_validation  # noqa: E402
 from agent_core.intent import Intent  # noqa: E402
@@ -32,6 +39,7 @@ from agent_core.loop import ReActLoop  # noqa: E402
 from agent_core.query_analysis import analyze_query_question, plan_query_question  # noqa: E402
 from agent_core.semantic import SemanticLayer  # noqa: E402
 from agent_core.statistical_analysis import analyze_statistical_question  # noqa: E402
+from agent_core.tools import Tools  # noqa: E402
 from server.session_store import SessionStore  # noqa: E402
 
 app = FastAPI(title="Olist 智能问数 Agent API", version="2.0")
@@ -164,6 +172,63 @@ def api_meta():
     })
 
 
+# ---------- 总览看板（轻量、确定性、与归因同一口径） ----------
+@app.get("/api/dashboard")
+def api_dashboard():
+    """看板所需的 KPI、分组与月度趋势，全部走确定性 query_mart。
+
+    数据口径与低评分归因完全一致：baseline/factors 复用 attribution.build_baseline /
+    screen_factors（二者经 Tools.query_mart 统一附加 is_delivery_analysis_eligible=1
+    与 has_review_record=1 约束）；趋势/延迟率/平均评分也走同一 query_mart。
+
+    不运行耗时的 Logistic 推断，因此秒级返回，避免看板被分钟级归因拖住，也避免
+    归因失败时丢弃已算好的基线/分组，导致「有效样本/低评分率/州/支付」显示为 0。
+    """
+    semantic = get_semantic()
+    provider = get_provider()
+    tools = Tools(provider, semantic)
+    sqls: list[str] = []
+    try:
+        order_base = build_baseline(tools, ORDER_TABLE, ORDER_COUNT_METRIC)
+        sqls.append(order_base["sql"])
+        # 看板只用到客户州/支付方式分组 + 延迟分档/品类缺口提示，
+        # 不扫 is_late_delivery / order_month，避免无谓的 GROUP BY 查询。
+        order_groups = screen_factors(
+            tools, ORDER_TABLE,
+            ["delay_bucket", "customer_state", "primary_category_name",
+             "primary_payment_type"],
+            order_base["low_score_rate"], ORDER_COUNT_METRIC,
+            semantic.guards.get("min_group_sample", 100), sql_sink=sqls,
+        )
+
+        late = tools.query_mart(ORDER_TABLE, metrics=["late_rate"], limit=1)
+        sqls.append(late["sql"])
+        avg = tools.query_mart(ORDER_TABLE, metrics=["avg_review_score"], limit=1)
+        sqls.append(avg["sql"])
+        trend = tools.query_mart(
+            ORDER_TABLE, metrics=["low_score_rate", "order_count"],
+            dimensions=["order_month"], limit=100,
+        )
+        sqls.append(trend["sql"])
+    finally:
+        provider.close()
+
+    late_rate = late["rows"][0]["_m_late_rate"] if late.get("ok") and late["rows"] else None
+    avg_score = (
+        avg["rows"][0]["_m_avg_review_score"] if avg.get("ok") and avg["rows"] else None
+    )
+    return _json({
+        "ok": True,
+        "source_label": "MySQL" if os.environ.get("USE_MYSQL") == "1" else "演示样本(CSV)",
+        "baseline": {"order": order_base},
+        "factors": {"order": order_groups},
+        "late_rate": late_rate,
+        "avg_review_score": avg_score,
+        "trend": trend["rows"] if trend.get("ok") else [],
+        "sqls": sqls,
+    })
+
+
 # ---------- 会话历史（MySQL 持久化） ----------
 _session_store: SessionStore | None = None
 
@@ -236,6 +301,16 @@ def api_save_messages(sid: str, body: MessagesBody):
     store = get_session_store()
     try:
         store.save_messages(sid, body.messages)
+        return {"ok": True}
+    finally:
+        store.close()
+
+
+@app.post("/api/sessions/{sid}/messages/append")
+def api_append_messages(sid: str, body: MessagesBody):
+    store = get_session_store()
+    try:
+        store.append_messages(sid, body.messages)
         return {"ok": True}
     finally:
         store.close()
@@ -338,4 +413,15 @@ async def api_chat(body: QuestionBody):
 # ---------- 生产：托管前端静态产物 ----------
 _WEB_DIST = ROOT / "web" / "dist"
 if _WEB_DIST.exists():
+    @app.exception_handler(StarletteHTTPException)
+    async def _spa_fallback(request, exc):
+        """SPA 前端路由（/dashboard、/chat 等）直接访问或刷新时回退到 index.html。
+
+        仅处理 404 且非 /api 的路径；API 路径保持原始 404 JSON 语义，避免把
+        不存在的接口误当成前端页面。
+        """
+        if exc.status_code == 404 and not request.url.path.startswith("/api"):
+            return FileResponse(_WEB_DIST / "index.html")
+        return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+
     app.mount("/", StaticFiles(directory=str(_WEB_DIST), html=True), name="web")

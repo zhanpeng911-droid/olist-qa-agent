@@ -868,3 +868,76 @@ uv run uvicorn server.main:app --port 8000   # http://127.0.0.1:8000
 
 - 0 失败；P95 升高因归因慢题（M-27/28/37 每轮约 460s，全量计算本身耗时，非失败）
 - 报告：`artifacts/evaluations/model_eval_20260818_141726.json`
+
+---
+
+## 38. 看板加载优化：归因后台并行，KPI 秒出
+
+> 日期：2026-08-18
+> 问题：看板首屏加载很久（几十秒）
+> 根因：`DashboardView.onMounted` 第一步 `await runAttribution()`（全量归因 30-90s，重启后 24h 缓存为空），KPI/趋势查询被串行卡在归因后面，loading 全程转圈
+> 修复：归因改为 fire-and-forget 后台加载（`.then` 填充 attr），KPI（meta + 延迟率/平均评分/趋势三查询）并行先加载先显示
+> 效果：KPI 秒出；三张图表待归因完成（首访 30-90s，命中缓存后秒出）后填充
+
+## 39. 归因性能优化：HC3 稳健标准误 BLAS 化 + 模型矩阵缓存
+
+> 日期：2026-08-19
+> 背景：全量业务库（MySQL）低评分归因单次 7 分钟以上仍未跑完，卡在 `statistics.logistic_model_formula` 手写 HC3 sandwich 的 leverage 逐行二次型 `np.einsum("ij,jk,ik->i", design, bread, design)`（9.5 万行 × 上百列设计矩阵，numpy 解释型三重循环，无 BLAS 加速）。
+
+### 优化 A：leverage 改为 BLAS 向量化（statistics.py）
+
+- `leverage = weights * np.einsum("ij,jk,ik->i", design, bread, design)`
+  → `leverage = weights * (design @ bread * design).sum(axis=1)`（`design @ bread` 走 BLAS gemm）
+- bread 求解：`np.linalg.pinv(...)`（总是 SVD 伪逆，慢）→ 先 `np.linalg.inv(...)`（快），奇异时回退 `pinv`（保留对秩不足设计矩阵的鲁棒性）
+
+### 优化 B：模型矩阵磁盘缓存（model_cache.py）
+
+- 新增 `agent_core/model_cache.py::cached_frame`，缓存「特征工程后的 DataFrame」
+- 缓存 key = 表名 + 排序列 + 行数指纹（`COUNT(*)`）；行数变化（数据更新）自动失效
+- `_run_order_model` / `_run_seller_model` 提取出 `_engineer_order` / `_engineer_seller`，load + 特征工程改为 `cached_frame` 包装
+- 缓存目录 `artifacts/model_cache/`（已加入 .gitignore）
+
+### 实测效果（MySQL 全量，9.5 万订单）
+
+| 阶段 | 优化前 | 优化后 |
+|---|---|---|
+| run_adjusted_validation（Logistic + HC3） | 7min+（未跑完） | 55.8s（冷）/ 51.9s（热） |
+| screen_low_score_features（单变量筛选） | — | 11.1s |
+
+- 优化 A 是主要提速来源：leverage 从 einsum 慢路径换到 BLAS，logistic 由 7min+ 降到 ~56s
+- 优化 B 仅省 ~4s：特征工程本身不是瓶颈，剩余慢点在 Logit 拟合（~52s）
+
+### 新发现的瓶颈（超出本次范围）
+
+- `analyze_item_drilldown` 中 `mart_order_item_analysis`（商品项表 JOIN 订单表）按 `product_id` 分组聚合，MySQL 查询超过 read_timeout(180s) 触发 Lost connection(2013)；归因内该段被 try/except 降级
+- 属数据层慢查询（缺索引 / JOIN+GROUP BY 全表），与 HC3 无关，需商品项表加索引或查询重构，建议后续单独处理
+
+### 回归
+
+- `pytest tests/test_m3.py` → 14 passed
+- `pytest tests/test_api.py` → 7 passed（含 `/api/attribution`）
+- 保留对秩不足/完全分离设计矩阵的 pinv 降级，`test_logistic_rank_deficient_design_does_not_crash` 通过
+
+## 40. 商品项下钻慢查询修复：Mart 表补建索引
+
+> 日期：2026-08-20
+> 问题：`analyze_item_drilldown` 中 `mart_order_item_analysis`（商品项表 JOIN 订单表）按 `product_id`/`category_name`/`seller_id` 分组聚合，MySQL 查询超 read_timeout(180s) 触发 Lost connection(2013)，归因里该段被 try/except 降级为 `ok=False`
+> 根因：三张 Mart 表（订单 / 订单-卖家 / 商品项）**全部无索引**；商品项表 JOIN 订单表 + GROUP BY 分组 + COUNT(DISTINCT) 全靠全表扫描 + Block Nested Loop + 临时表 + 文件排序（EXPLAIN 显示两张表 `type=ALL`、`rows`≈9.5万/10.9万）
+> 修复：补建索引（root 直连 DDL）
+>   - `mart_order_delivery`：`PRIMARY KEY (order_id)`（order_id 已验证唯一）
+>   - `mart_order_item_business`：`INDEX(order_id)` + `INDEX(product_id)` + `INDEX(category_name)` + `INDEX(seller_id)`
+>   - `mart_order_seller_delivery`：`INDEX(order_id)` + `INDEX(seller_state)` + `INDEX(customer_state)`
+>   - `scripts/import_mart_to_mysql.py` 新增 `INDEX_DEFS`，建表时自动带索引（样本/全量商品项表名均覆盖）
+
+### 实测效果（MySQL 全量）
+
+| 环节 | 修复前 | 修复后 |
+|---|---|---|
+| 商品项分组查询（category/product/seller） | 180s+ 超时 | 1.4~1.5s |
+| analyze_item_drilldown 完整（含显著性检验） | 180s+ 超时降级 | 12.3s（ok=True） |
+| run_attribution 端到端 | 375s（超时降级） | 95.2s（ok=True） |
+
+### 回归
+
+- `pytest tests/test_m3.py tests/test_api.py` → 21 passed in 78.6s
+- 修复后 `/api/attribution` 正常返回 `ok=True`，`item_drilldown.ok=True`

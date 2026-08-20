@@ -30,6 +30,29 @@ DATE_HINTS = ("date", "timestamp")
 TYPE_SAMPLE_ROWS = 3000
 INSERT_BATCH = 5000
 
+# 建表时按表名追加索引，避免 JOIN / GROUP BY 全表扫描（见 TEST_LOG §40）。
+# 商品项表在样本与全量下文件名不同（delivery / business），故两处都列。
+INDEX_DEFS = {
+    "mart_order_delivery": ["PRIMARY KEY (order_id)"],
+    "mart_order_item_delivery": [
+        "INDEX idx_item_order_id (order_id)",
+        "INDEX idx_item_product_id (product_id)",
+        "INDEX idx_item_category_name (category_name)",
+        "INDEX idx_item_seller_id (seller_id)",
+    ],
+    "mart_order_item_business": [
+        "INDEX idx_item_order_id (order_id)",
+        "INDEX idx_item_product_id (product_id)",
+        "INDEX idx_item_category_name (category_name)",
+        "INDEX idx_item_seller_id (seller_id)",
+    ],
+    "mart_order_seller_delivery": [
+        "INDEX idx_seller_order_id (order_id)",
+        "INDEX idx_seller_state (seller_state)",
+        "INDEX idx_customer_state (customer_state)",
+    ],
+}
+
 
 def _is_missing(v) -> bool:
     if v is None:
@@ -90,10 +113,12 @@ def import_csv(conn, csv_path: Path, table: str) -> int:
         types = _infer_types(headers, sample)
 
         cols = ", ".join(f"`{c}` {types[c]}" for c in headers)
+        index_defs = INDEX_DEFS.get(table, [])
+        index_clause = (", " + ", ".join(index_defs)) if index_defs else ""
         with conn.cursor() as cur:
             cur.execute(f"DROP TABLE IF EXISTS `{table}`")
-            cur.execute(f"CREATE TABLE `{table}` ({cols}) ENGINE=InnoDB "
-                        "DEFAULT CHARSET=utf8mb4")
+            cur.execute(f"CREATE TABLE `{table}` ({cols}{index_clause}) "
+                        "ENGINE=InnoDB DEFAULT CHARSET=utf8mb4")
         sql = (f"INSERT INTO `{table}` ({', '.join('`'+c+'`' for c in headers)}) "
                f"VALUES ({', '.join(['%s'] * len(headers))})")
 

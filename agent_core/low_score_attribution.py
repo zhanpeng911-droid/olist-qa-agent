@@ -16,6 +16,7 @@ from scipy import stats
 
 from .data_provider import DataProvider
 from .deep_validation import _route_validation
+from .model_cache import cached_frame
 from .statistics import (
     ORDER_WHERE,
     SELLER_WHERE,
@@ -551,17 +552,22 @@ def _selected(screening: dict, table: str) -> list[FeatureSpec]:
     ]
 
 
-def _run_order_model(provider: DataProvider, specs: list[FeatureSpec],
-                     sqls: list[str]) -> tuple[dict | None, list[dict], dict]:
-    if not specs:
-        return None, [], {"table": ORDER_TABLE, "rows": 0, "columns": 0}
-    base_columns = {
-        "is_low_score", "order_month", "customer_state", "primary_category_name",
-        "primary_payment_type", "price_total", "freight_ratio", "item_count",
-        "is_multi_seller_order", "promised_delivery_days",
-    }
-    columns = sorted(base_columns | {spec.field for spec in specs})
-    df = load_table(provider, ORDER_TABLE, columns, where=ORDER_WHERE, sql_sink=sqls)
+_ORDER_ZSCORE = {
+    "price_total": "z_price", "freight_ratio": "z_freight_ratio",
+    "item_count": "z_item_count", "promised_delivery_days": "z_promised_days",
+    "fulfillment_days": "z_fulfillment", "approval_days": "z_approval",
+    "late_days": "z_late_days",
+}
+_SELLER_ZSCORE = (
+    ("seller_price", "z_seller_price"),
+    ("seller_freight_ratio", "z_seller_freight_ratio"),
+    ("seller_items", "z_seller_items"),
+    ("approximate_distance_km", "z_distance"),
+)
+
+
+def _engineer_order(df: pd.DataFrame) -> pd.DataFrame:
+    """订单级特征工程：数值化、去缺、稀疏类别合并、z 标准化、延迟分档秩。"""
     for column in ("is_low_score", "is_multi_seller_order"):
         df[column] = pd.to_numeric(df[column], errors="coerce")
     df = df.dropna(subset=["is_low_score"])
@@ -575,17 +581,49 @@ def _run_order_model(provider: DataProvider, specs: list[FeatureSpec],
         df, ["primary_category_name"],
         max(300, math.ceil(len(df) * 0.005)),
     )
-    transforms = {
-        "price_total": "z_price", "freight_ratio": "z_freight_ratio",
-        "item_count": "z_item_count", "promised_delivery_days": "z_promised_days",
-        "fulfillment_days": "z_fulfillment", "approval_days": "z_approval",
-        "late_days": "z_late_days",
-    }
-    for source, target in transforms.items():
+    for source, target in _ORDER_ZSCORE.items():
         if source in df:
             _zscore(df, source, target)
     if "delay_bucket" in df:
         df["delay_rank"] = df["delay_bucket"].map(DELAY_RANK)
+    return df
+
+
+def _engineer_seller(df: pd.DataFrame) -> pd.DataFrame:
+    """卖家级特征工程：数值化、去缺、稀疏类别合并、z 标准化。"""
+    for column in ("is_low_score", "is_late_delivery"):
+        df[column] = pd.to_numeric(df[column], errors="coerce")
+    df = df.dropna(subset=["is_low_score", "is_late_delivery"])
+    base_category_min = max(100, math.ceil(len(df) * 0.002))
+    _collapse_rare(df, ["order_month", "customer_state"], base_category_min)
+    _collapse_rare(
+        df, ["primary_category_name"],
+        max(300, math.ceil(len(df) * 0.005)),
+    )
+    for source, target in _SELLER_ZSCORE:
+        if source in df:
+            _zscore(df, source, target)
+    if "seller_state" in df.columns:
+        _collapse_rare(df, ["seller_state"], base_category_min)
+    for column in ("cross_state", "is_any_item_handover_late"):
+        if column in df:
+            df[column] = pd.to_numeric(df[column], errors="coerce")
+    return df
+
+
+def _run_order_model(provider: DataProvider, specs: list[FeatureSpec],
+                     sqls: list[str]) -> tuple[dict | None, list[dict], dict]:
+    if not specs:
+        return None, [], {"table": ORDER_TABLE, "rows": 0, "columns": 0}
+    base_columns = {
+        "is_low_score", "order_month", "customer_state", "primary_category_name",
+        "primary_payment_type", "price_total", "freight_ratio", "item_count",
+        "is_multi_seller_order", "promised_delivery_days",
+    }
+    columns = sorted(base_columns | {spec.field for spec in specs})
+    df = cached_frame(
+        provider, ORDER_TABLE, columns, ORDER_WHERE, _engineer_order, sql_sink=sqls,
+    )
 
     terms = {
         "C(order_month)", "C(customer_state)", "C(primary_category_name)",
@@ -639,24 +677,9 @@ def _run_seller_model(provider: DataProvider, specs: list[FeatureSpec],
         "is_late_delivery", "seller_price", "seller_freight_ratio", "seller_items",
     }
     columns = sorted(base_columns | {spec.field for spec in modeled})
-    df = load_table(provider, SELLER_TABLE, columns, where=SELLER_WHERE, sql_sink=sqls)
-    for column in ("is_low_score", "is_late_delivery"):
-        df[column] = pd.to_numeric(df[column], errors="coerce")
-    df = df.dropna(subset=["is_low_score", "is_late_delivery"])
-    base_category_min = max(100, math.ceil(len(df) * 0.002))
-    _collapse_rare(df, ["order_month", "customer_state"], base_category_min)
-    _collapse_rare(
-        df, ["primary_category_name"],
-        max(300, math.ceil(len(df) * 0.005)),
+    df = cached_frame(
+        provider, SELLER_TABLE, columns, SELLER_WHERE, _engineer_seller, sql_sink=sqls,
     )
-    for source, target in (
-        ("seller_price", "z_seller_price"),
-        ("seller_freight_ratio", "z_seller_freight_ratio"),
-        ("seller_items", "z_seller_items"),
-        ("approximate_distance_km", "z_distance"),
-    ):
-        if source in df:
-            _zscore(df, source, target)
     terms = {
         "C(order_month)", "C(customer_state)", "C(primary_category_name)",
         "is_late_delivery", "z_seller_price", "z_seller_freight_ratio",
@@ -670,16 +693,11 @@ def _run_seller_model(provider: DataProvider, specs: list[FeatureSpec],
         ),
     }
     categorical_map = {"seller_state": "C(seller_state)"}
-    if any(spec.name == "seller_state" for spec in modeled):
-        _collapse_rare(df, ["seller_state"], base_category_min)
     for spec in modeled:
         if spec.name in direct_map:
             terms.add(direct_map[spec.name][0])
         elif spec.name in categorical_map:
             terms.add(categorical_map[spec.name])
-    for column in ("cross_state", "is_any_item_handover_late"):
-        if column in df:
-            df[column] = pd.to_numeric(df[column], errors="coerce")
     formula = "is_low_score ~ " + " + ".join(sorted(terms))
     model = _fit(df, formula, "订单-卖家级自动调整模型")
     results = []

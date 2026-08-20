@@ -166,3 +166,31 @@ class SessionStore:
                     ),
                 )
             cur.execute("UPDATE chat_session SET updated_at = %s WHERE id = %s", (now, sid))
+
+    def append_messages(self, sid: str, messages: list[dict]) -> None:
+        """追加消息（不删除已有）。
+
+        用于流式对话结束后增量落库本轮新增消息，避免「先删后插」全量覆盖在
+        切换会话 / 并发下互相覆盖。
+        """
+        if not messages:
+            return
+        now = int(time.time() * 1000)
+        with self._cursor() as cur:
+            for m in messages:
+                role = m.get("role", "assistant")
+                result = m.get("result")
+                cur.execute(
+                    "INSERT INTO chat_message (session_id, role, intent, text, summary, result, error, created_at) "
+                    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
+                    (
+                        sid, role,
+                        m.get("intent"),
+                        m.get("text"),
+                        m.get("summary"),
+                        json.dumps(result, ensure_ascii=False) if result is not None else None,
+                        m.get("error"),
+                        now,
+                    ),
+                )
+            cur.execute("UPDATE chat_session SET updated_at = %s WHERE id = %s", (now, sid))

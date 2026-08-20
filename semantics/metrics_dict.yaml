@@ -1,6 +1,10 @@
 # 语义字典 / 指标字典（唯一真相源）
 # 字段名采用《低评分归因与改善建议Agent搭建思路》标准命名。
 # 模型只能"选"这里预置的指标与维度，不能自己编，以锁死业务口径。
+#
+# 口径说明：下表各 filters 中的 valid_sample / reviewed_only 约束与
+# agent_core/statistics.py 的 VALID_SAMPLE_SQL / REVIEWED_ONLY_SQL 保持一致；
+# 修改任一侧时需同步另一侧。
 
 tables:
   mart_order_delivery:
@@ -32,8 +36,8 @@ tables:
     dimension_exprs:
       order_year: "SUBSTR(order_month, 1, 4)"
     filters:
-      valid_sample: "is_delivery_analysis_eligible = 1"   # 履约分析有效样本
-      reviewed_only: "has_review_record = 1"              # 有评价订单（低评分分母）
+      valid_sample: &valid_sample "is_delivery_analysis_eligible = 1"   # 履约分析有效样本
+      reviewed_only: &reviewed_only "has_review_record = 1"             # 有评价订单（低评分分母）
 
   mart_order_seller_delivery:
     desc: "订单-卖家级，一单-卖家一行（卖家/线路归因表）"
@@ -52,8 +56,8 @@ tables:
       - is_multi_seller_order  # 是否多卖家订单(0/1)
       - is_late_delivery  # 是否延迟(0/1)，用于线路×延迟交叉
     filters:
-      valid_sample: "is_delivery_analysis_eligible = 1"
-      reviewed_only: "has_review_record = 1"
+      valid_sample: *valid_sample
+      reviewed_only: *reviewed_only
 
   mart_order_item_analysis:
     desc: "商品项下钻视图，一商品项一行；由商品项表与订单评价字段受控关联"
@@ -77,8 +81,8 @@ tables:
       - purchase_month
       - is_late_delivery
     filters:
-      valid_sample: "is_delivery_analysis_eligible = 1"
-      reviewed_only: "has_review_record = 1"
+      valid_sample: *valid_sample
+      reviewed_only: *reviewed_only
 
 guards:
   low_score_definition: "review_score <= 3"

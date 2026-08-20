@@ -23,6 +23,11 @@ export async function getMeta() {
   return (await http.get('/meta')).data
 }
 
+/** 总览看板：一次性返回 KPI/分组/月度趋势（轻量确定性取数，与归因同口径） */
+export async function getDashboard() {
+  return (await http.get('/dashboard')).data
+}
+
 // ---------- 会话历史（MySQL 持久化） ----------
 export async function listSessions(): Promise<any[]> {
   const { data } = await http.get('/sessions')
@@ -49,6 +54,10 @@ export async function getMessages(sid: string): Promise<any[]> {
 
 export async function saveMessages(sid: string, messages: any[]) {
   await http.post(`/sessions/${sid}/messages`, { messages })
+}
+
+export async function appendMessages(sid: string, messages: any[]) {
+  await http.post(`/sessions/${sid}/messages/append`, { messages })
 }
 
 /** SSE 流式对话：onEvent(event, data)，结束时 onDone()（finally 保证必然回调） */

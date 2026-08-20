@@ -6,12 +6,17 @@
         <div v-for="i in 4" :key="i" class="s-card kpi"><el-skeleton :rows="3" animated /></div>
       </div>
       <div class="chart-grid">
-        <div v-for="i in 2" :key="i" class="s-card"><el-skeleton :rows="6" animated /></div>
+        <div class="s-card chart-card"><el-skeleton :rows="6" animated /></div>
+        <div class="s-card chart-card"><el-skeleton :rows="6" animated /></div>
+        <div class="s-card chart-card wide"><el-skeleton :rows="6" animated /></div>
       </div>
     </template>
 
     <template v-else-if="error">
-      <el-empty :description="`看板加载失败：${error}`" />
+      <div class="empty-panel">
+        <el-empty :description="`看板加载失败：${error}`" />
+        <el-button type="primary" :icon="Refresh" @click="load">刷新数据</el-button>
+      </div>
     </template>
 
     <template v-else>
@@ -39,12 +44,18 @@
             </span>
           </h3>
           <BaseChart v-if="stateBar" :option="stateBar" height="260px" />
-          <el-empty v-else description="样本不足，无州级分组数据" :image-size="60" />
+          <div v-else class="empty-panel">
+            <el-empty description="无州级分组数据：分组未达到最小样本门槛，或当前无有效样本" :image-size="60" />
+            <el-button size="small" :icon="Refresh" @click="load">刷新数据</el-button>
+          </div>
         </div>
         <div class="s-card chart-card">
           <h3 class="s-title">低评分订单 · 支付方式构成</h3>
           <BaseChart v-if="payDonut" :option="payDonut" height="230px" />
-          <el-empty v-else description="样本不足，无支付方式分组" :image-size="60" />
+          <div v-else class="empty-panel">
+            <el-empty description="无支付方式分组：分组未达到最小样本门槛，或当前无有效样本" :image-size="60" />
+            <el-button size="small" :icon="Refresh" @click="load">刷新数据</el-button>
+          </div>
           <!-- 2×2 图例网格（卡片化，拒绝单行横排挤压） -->
           <div v-if="payLegend.length" class="donut-legend">
             <div v-for="(lg, i) in payLegend" :key="lg.label" class="lg-item">
@@ -60,7 +71,10 @@
         <div class="s-card chart-card wide">
           <h3 class="s-title">低评分率 · 月度趋势</h3>
           <BaseChart v-if="trendArea" :option="trendArea" height="240px" />
-          <el-empty v-else description="暂无月度趋势数据" :image-size="60" />
+          <div v-else class="empty-panel">
+            <el-empty description="暂无月度趋势数据（有效月份少于 2 个）" :image-size="60" />
+            <el-button size="small" :icon="Refresh" @click="load">刷新数据</el-button>
+          </div>
         </div>
       </div>
 
@@ -77,20 +91,19 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { InfoFilled } from '@element-plus/icons-vue'
+import { InfoFilled, Refresh } from '@element-plus/icons-vue'
 import BaseChart from '../components/charts/BaseChart.vue'
-import { runAttribution, runQuery, getMeta } from '../api'
+import { getDashboard } from '../api'
 import { areaOption, barOption, donutOption, sparklineOption as spark, flatLineOption as flatLine } from '../charts'
 
 const loading = ref(true)
 const error = ref('')
 const attr = ref<any>(null)
-const meta = ref<any>(null)
 const lateRate = ref<number | null>(null)
 const avgScore = ref<number | null>(null)
 const trend = ref<any[]>([])
 
-const sourceLabel = computed(() => meta.value?.source_label ?? '演示样本')
+const sourceLabel = computed(() => attr.value?.source_label ?? '演示样本')
 const baseSample = computed(() => attr.value?.baseline?.order?.sample ?? 0)
 
 const orderFactors = computed(() => attr.value?.factors?.order ?? [] as any[])
@@ -98,7 +111,7 @@ function groupsOf(dim: string) {
   return orderFactors.value.filter((g: any) => g.dimension === dim)
 }
 
-// 数据缺口提示（1000 行样本下被门槛过滤的维度）
+// 数据缺口提示（样本不足被门槛过滤的维度）
 const notices = computed(() => {
   const list: string[] = []
   if (!groupsOf('delay_bucket').some((g: any) => g.value !== '按时')) {
@@ -113,13 +126,19 @@ const notices = computed(() => {
 const kpis = computed(() => {
   const base = attr.value?.baseline?.order
   const lowRate = base?.low_score_rate as number | undefined
-  const cleanTrend = trend.value
-    .filter((r: any) => (r._m_order_count ?? 100) >= 10)
-    .map((r: any) => r._m_low_score_rate)
+  const baseSample = base?.sample ?? 0
+  // 仅当「低评分率」有值且样本非 0 时才允许绘制走势线；否则与其它卡片一致降级为水平占位虚线，
+  // 避免出现「数值为 — / 样本为 0」却仍画波浪线的口径失真。
+  const hasLowRate = typeof lowRate === 'number' && Number.isFinite(lowRate) && baseSample > 0
+  const cleanTrend = hasLowRate
+    ? trend.value
+        .filter((r: any) => (r._m_order_count ?? 100) >= 10)
+        .map((r: any) => r._m_low_score_rate)
+    : []
   return [
     {
       label: '低评分率', value: fmtPct(lowRate),
-      pillText: `样本 ${base?.sample ?? 0}`,
+      pillText: `样本 ${baseSample}`,
       spark: cleanTrend,
     },
     {
@@ -128,7 +147,7 @@ const kpis = computed(() => {
       spark: [],
     },
     {
-      label: '有效样本', value: base?.sample ?? 0,
+      label: '有效样本', value: baseSample,
       pillText: '订单级', spark: [],
     },
     {
@@ -201,29 +220,24 @@ function fmtPct(v: number | undefined | null) {
   return v == null ? '—' : (v * 100).toFixed(1) + '%'
 }
 
-onMounted(async () => {
+async function load() {
+  loading.value = true
+  error.value = ''
   try {
-    const [a, m] = await Promise.all([runAttribution('对低评分进行归因'), getMeta()])
-    attr.value = a
-    meta.value = m
-    const [lr, sc, tr] = await Promise.all([
-      runQuery('总体延迟率是多少'),
-      runQuery('平均评分是多少'),
-      runQuery('各月份低评分率和订单量'),
-    ])
-    const row0 = lr?.rows?.[0] ?? {}
-    const k = Object.keys(row0).find(x => x.includes('late') || x.includes('delay'))
-    if (k) lateRate.value = row0[k]
-    const scRow = sc?.rows?.[0] ?? {}
-    const sk = Object.keys(scRow).find(x => x.includes('review_score') || x.includes('avg'))
-    if (sk) avgScore.value = scRow[sk]
-    trend.value = tr?.rows ?? []
+    // 单次轻量取数：KPI / 分组 / 月度趋势同一口径、秒级返回，不依赖慢速 Logistic 归因
+    const d = await getDashboard()
+    attr.value = d
+    lateRate.value = d.late_rate ?? null
+    avgScore.value = d.avg_review_score ?? null
+    trend.value = d.trend ?? []
   } catch (e: any) {
     error.value = String(e?.message ?? e)
   } finally {
     loading.value = false
   }
-})
+}
+
+onMounted(load)
 </script>
 
 <style scoped>
@@ -235,6 +249,7 @@ onMounted(async () => {
 .kpi-spark { height: 34px; }
 .chart-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
 .chart-card.wide { grid-column: 1 / -1; }
+.empty-panel { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 12px 0; }
 
 /* 州排行 Top3 徽章（浅蓝底深蓝字） */
 .s-title { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }

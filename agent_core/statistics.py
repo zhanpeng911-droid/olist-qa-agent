@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import math
 import gc
+import re
 import warnings
 
 import numpy as np
@@ -18,12 +19,21 @@ from .data_provider import DataProvider
 
 _LOAD_LIMIT = 250000
 
+# 列名白名单：load_table / load_group_counts 拼接列名前先校验，防止注入。
+_COLUMN_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+def _check_column_name(name: str) -> str:
+    if not _COLUMN_RE.fullmatch(name):
+        raise ValueError(f"非法列名: {name!r}")
+    return name
+
 
 def load_table(provider: DataProvider, table: str, columns: list[str],
                where: str | None = None, limit: int = _LOAD_LIMIT,
                sql_sink: list[str] | None = None) -> pd.DataFrame:
     """从 provider 拉取原始行数据转 DataFrame。"""
-    cols = ", ".join(columns) if columns else "*"
+    cols = ", ".join(_check_column_name(c) for c in columns) if columns else "*"
     sql = f"SELECT {cols} FROM {table}"
     if where:
         sql += f" WHERE {where}"
@@ -34,10 +44,16 @@ def load_table(provider: DataProvider, table: str, columns: list[str],
     return pd.DataFrame(rows)
 
 
-ORDER_WHERE = "is_delivery_analysis_eligible = 1 AND has_review_record = 1"
+# ---- 分析口径基础约束（唯一真相源） ----
+# 这些 WHERE 片段被 statistics / bivariate_analysis / deep_validation 复用；
+# 语义字典 metrics_dict.yaml 中的 valid_sample / reviewed_only 与此保持一致。
+VALID_SAMPLE_SQL = "is_delivery_analysis_eligible = 1"
+REVIEWED_ONLY_SQL = "has_review_record = 1"
+SINGLE_SELLER_SQL = "is_multi_seller_order = 0"
+
+ORDER_WHERE = f"{VALID_SAMPLE_SQL} AND {REVIEWED_ONLY_SQL}"
 SELLER_WHERE = (
-    "is_delivery_analysis_eligible = 1 AND has_review_record = 1 "
-    "AND is_multi_seller_order = 0"
+    f"{VALID_SAMPLE_SQL} AND {REVIEWED_ONLY_SQL} AND {SINGLE_SELLER_SQL}"
 )
 
 
@@ -45,10 +61,13 @@ def load_group_counts(provider: DataProvider, table: str, factor: str,
                       target: str = "is_low_score", where: str | None = None,
                       sql_sink: list[str] | None = None) -> pd.DataFrame:
     """在数据库端聚合列联计数，Python不接收明细行。"""
+    factor = _check_column_name(factor)
+    target = _check_column_name(target)
     sql = f"SELECT {factor}, {target}, COUNT(*) AS n FROM {table}"
     if where:
         sql += f" WHERE {where}"
-    sql += f" GROUP BY {factor}, {target} LIMIT 10000"
+    # LIMIT 设大一些，避免高基数因素（如线路组合）分组被截断而漏掉尾部小组
+    sql += f" GROUP BY {factor}, {target} LIMIT 100000"
     if sql_sink is not None:
         sql_sink.append(sql)
     return pd.DataFrame(provider.execute(sql))
@@ -248,30 +267,25 @@ def logistic_model_formula(df: pd.DataFrame, formula: str,
                            robust: str = "HC3", maxiter: int = 500) -> dict:
     """Logistic 回归（statsmodels formula，分类变量自动哑编码）+ 稳健 SE。
 
-    返回各解释变量的调整 OR / 95%CI / p，以及伪 R²、样本量。
+    稳健协方差使用手写 HC3 sandwich（保留对奇异设计矩阵的 pinv 鲁棒性），
+    但 leverage 改用 BLAS 向量化（design @ bread）替代原先逐行 einsum（性能瓶颈）。
     """
     import statsmodels.api as sm
     from statsmodels.formula.api import glm, logit
 
-    # cov_type 直接传给 fit：results 即携带稳健标准误（HC3）
-    # 完全分离/稀疏类别可能先产生数值 RuntimeWarning，随后抛出异常；
-    # 上层会明确降级。这里避免这些预期警告污染页面和评测输出。
     fit_method = "Logit-Newton"
     fallback_reason = None
     with warnings.catch_warnings():
         warnings.filterwarnings("ignore", module=r"statsmodels\..*")
         try:
-            # 先使用标准MLE。稳健协方差在下方用广义逆自行计算，避免
-            # statsmodels在HC3阶段对近奇异Hessian直接求逆而抛LinAlgError。
             model = logit(formula, df).fit(
                 disp=0, maxiter=maxiter, method="newton"
             )
             if not model.mle_retvals.get("converged", False):
                 raise RuntimeError("Newton未收敛")
         except Exception as error:
-            # GLM Binomial的IRLS使用广义逆处理秩不足设计矩阵；
-            # HC3仍由下方统一计算，不依赖statsmodels内部的普通矩阵逆。
-            # 这是统计等价的二项Logistic降级，不是改用另一种目标或口径。
+            # GLM Binomial 的 IRLS 使用广义逆处理秩不足设计矩阵，作为退化降级；
+            # 统计等价，不改目标或口径。
             fallback_reason = f"{type(error).__name__}: {error}"
             fit_method = "GLM-Binomial回退"
             model = glm(
@@ -280,14 +294,18 @@ def logistic_model_formula(df: pd.DataFrame, formula: str,
             if not getattr(model, "converged", True):
                 raise RuntimeError("GLM-Binomial未收敛")
 
-    # 二项Logistic的HC3 sandwich covariance。bread使用pinv，因此即使设计
-    # 矩阵接近奇异也不会让整个模型崩溃；这正是全量分类变量模型所需的保护。
+    # 二项 Logistic 的 HC3 sandwich。bread 优先普通逆（快），奇异时回退伪逆；
+    # leverage 用 BLAS 向量化（design @ bread 走 gemm），替代逐行 einsum。
     design = np.asarray(model.model.exog, dtype=float)
     outcome = np.asarray(model.model.endog, dtype=float)
     fitted = np.asarray(model.predict(), dtype=float)
     weights = np.clip(fitted * (1.0 - fitted), 1e-12, None)
-    bread = np.linalg.pinv(design.T @ (weights[:, None] * design))
-    leverage = weights * np.einsum("ij,jk,ik->i", design, bread, design)
+    gram = design.T @ (weights[:, None] * design)
+    try:
+        bread = np.linalg.inv(gram)
+    except np.linalg.LinAlgError:
+        bread = np.linalg.pinv(gram)
+    leverage = weights * (design @ bread * design).sum(axis=1)
     adjusted_residual = (outcome - fitted) / np.clip(1.0 - leverage, 1e-6, None)
     meat = design.T @ ((adjusted_residual ** 2)[:, None] * design)
     robust_cov = bread @ meat @ bread
@@ -304,10 +322,14 @@ def logistic_model_formula(df: pd.DataFrame, formula: str,
         se = robust_se[index]
         lo, hi = estimate - 1.96 * se, estimate + 1.96 * se
         p_value = 2.0 * stats.norm.sf(abs(estimate / se)) if se > 0 else 1.0
+        # 对指数加 clip，避免完全分离/极端系数下 np.exp 溢出为 inf 并污染日志
+        or_val = float(np.exp(np.clip(estimate, -700.0, 700.0)))
+        ci_lo = float(np.exp(np.clip(lo, -700.0, 700.0)))
+        ci_hi = float(np.exp(np.clip(hi, -700.0, 700.0)))
         terms.append({
             "term": term,
-            "or": round(float(np.exp(estimate)), 3),
-            "ci95": [round(float(np.exp(lo)), 3), round(float(np.exp(hi)), 3)],
+            "or": round(or_val, 3),
+            "ci95": [round(ci_lo, 3), round(ci_hi, 3)],
             "p": float(p_value),
         })
     joint_tests = []

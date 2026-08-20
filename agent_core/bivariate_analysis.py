@@ -13,7 +13,15 @@ import pandas as pd
 from scipy import stats
 
 from .data_provider import DataProvider
-from .statistics import correlation_test, distribution_test, load_table, trend_test
+from .statistics import (
+    REVIEWED_ONLY_SQL,
+    SINGLE_SELLER_SQL,
+    VALID_SAMPLE_SQL,
+    correlation_test,
+    distribution_test,
+    load_table,
+    trend_test,
+)
 
 
 ORDER_TABLE = "mart_order_delivery"
@@ -286,12 +294,12 @@ def plan_statistical_question(question: str) -> dict:
 
 
 def _where(plan: dict) -> str:
-    clauses = ["is_delivery_analysis_eligible = 1"]
+    clauses = [VALID_SAMPLE_SQL]
     if {plan["variable_x"], plan["variable_y"]} & RATING_VARIABLES:
-        clauses.append("has_review_record = 1")
+        clauses.append(REVIEWED_ONLY_SQL)
     if plan["table"] == SELLER_TABLE and \
             "is_multi_seller_order" not in {plan["variable_x"], plan["variable_y"]}:
-        clauses.append("is_multi_seller_order = 0")
+        clauses.append(SINGLE_SELLER_SQL)
     return " AND ".join(clauses)
 
 

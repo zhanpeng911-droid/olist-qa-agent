@@ -316,15 +316,20 @@ class MySQLProvider(DataProvider):
         self.source_name = DATABASE_SOURCE_LABEL
 
     def _check_sql(self, sql: str) -> None:
-        stmt = sql.strip().lstrip("(").lower()
-        if not stmt.startswith(self.SELECT_START):
+        stmt = sql.strip().lstrip("(")
+        if ";" in stmt:
+            raise RuntimeError("MySQLProvider 不允许多语句 SQL")
+        lowered = stmt.lower()
+        if not lowered.startswith(self.SELECT_START):
             raise RuntimeError("MySQLProvider 仅允许只读 SELECT")
-        # 提取 FROM/JOIN 后的表名，校验白名单
-        for t in re.findall(r"\b(?:from|join)\s+([a-zA-Z0-9_`]+)", stmt):
+        # 先移除注释再提取表名，避免 FROM/JOIN 被注释干扰而绕过白名单
+        cleaned = re.sub(r"/\*.*?\*/", " ", lowered, flags=re.DOTALL)
+        cleaned = re.sub(r"--[^\n]*", " ", cleaned)
+        for t in re.findall(r"\b(?:from|join)\s+([a-zA-Z0-9_`]+)", cleaned):
             t = t.strip("`")
             if self._allow_tables and t not in self._allow_tables:
                 raise RuntimeError(f"访问了白名单外的表: {t}")
-        if "limit" not in stmt:
+        if "limit" not in lowered:
             raise RuntimeError("MySQLProvider 要求查询必须带 LIMIT")
 
     def execute(self, sql: str) -> list[dict]:

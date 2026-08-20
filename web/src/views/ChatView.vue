@@ -83,7 +83,7 @@ import { Delete } from '@element-plus/icons-vue'
 import {
   AlertTriangle, ArrowRight, BarChart3, Paperclip, Search, Send, Sparkles, TrendingUp, User, Wrench,
 } from 'lucide-vue-next'
-import { chatStream } from '../api'
+import { appendMessages, chatStream } from '../api'
 import MarkdownText from '../components/cards/MarkdownText.vue'
 import ResultCard from '../components/cards/ResultCard.vue'
 import { useSessions } from '../composables/useSessions'
@@ -200,11 +200,17 @@ async function send(q?: unknown) {
   input.value = ''
   sending.value = true
   const firstMsg = !messages.value.length
-  messages.value.push({ role: 'user', text: question })
+  const userMsg = { role: 'user', text: question }
+  messages.value.push(userMsg)
   const ai: any = { role: 'assistant', steps: [], result: null, intent: '' }
   messages.value.push(ai)
   if (firstMsg) await setTitle(currentId.value, question.slice(0, 18))
   scrollBottom()
+
+  // 增量落库本轮两条消息（user + assistant），避免全量覆盖在切换会话/并发下竞态
+  const persist = () => {
+    appendMessages(currentId.value, serializeMessages([userMsg, ai])).catch(() => {})
+  }
 
   try {
     await chatStream(
@@ -233,9 +239,9 @@ async function send(q?: unknown) {
       },
       () => {
         ai.suggestions = ai.intent ? suggestionsFor(ai.intent) : []
-        setMessages(serializeMessages(messages.value))
+        persist()
       },
-      (e) => { ai.error = String(e); setMessages(serializeMessages(messages.value)) },
+      (e) => { ai.error = String(e); persist() },
     )
   } finally {
     sending.value = false

@@ -4,13 +4,27 @@
 
 <script setup lang="ts">
 import { computed } from 'vue'
-import { marked } from 'marked'
+import { marked, Renderer } from 'marked'
 
 const props = defineProps<{ text: string }>()
 
-// DeepSeek 回答含 Markdown，渲染为符合设计体系的富文本
+// 转义原始 HTML，防止 LLM 回答 / 会话历史中的恶意 HTML 通过 v-html 注入执行
+function escapeHtml(raw: string): string {
+  return raw
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
+}
+
+// 复用单一 renderer：把 html token 转义为纯文本，阻断 XSS（不污染全局 marked）
+const safeRenderer = new Renderer()
+safeRenderer.html = (token: { text: string }) => escapeHtml(token.text)
+
+// DeepSeek 回答含 Markdown，渲染为符合设计体系的富文本（原始 HTML 已被转义）
 const html = computed(() =>
-  marked.parse(props.text || '', { breaks: true, gfm: true }),
+  marked.parse(props.text || '', { breaks: true, gfm: true, renderer: safeRenderer }),
 )
 </script>
 

@@ -662,12 +662,39 @@ def run_attribution(provider: DataProvider, semantic: SemanticLayer,
         inference = {"ok": False, "error": f"低评分关联因素分析失败：{e}"}
 
     if not inference.get("ok"):
+        # 推断（单变量筛选 + Logistic 调整）失败时，仍返回已算好的描述性归因结果，
+        # 避免把 baseline / factors / priorities 一起丢弃导致前端整块归零。
         return {
             "ok": False,
             "schema_version": ATTRIBUTION_SCHEMA_VERSION,
             "error": inference.get("error", "低评分关联因素分析未完成"),
-            "sqls": sqls,
+            "baseline": {"order": order_base, "seller": seller_base},
+            "factors": {"order": order_groups, "seller": seller_groups},
+            "priorities": priorities,
+            "routes": routes,
+            "item_drilldown": item_drilldown,
+            "feature_tests": [],
+            "significant_features": [],
+            "inconclusive_features": [],
+            "not_significant_features": [],
+            "deep_validation_plan": [],
+            "selected_features": [],
+            "adjusted_features": [],
+            "adjusted_explanations": [],
+            "adjusted_validation": {},
+            "control_policy": {},
+            "recommendations": {
+                "ok": True, "status": "disabled_evidence_only",
+                "recommendations": [],
+                "note": "推断未完成，仅提供描述性归因结果，不生成治理策略。",
+            },
             "caveats": list(CAVEATS),
+            "sqls": sqls,
+            "analysis_mode": "descriptive_fallback",
+            "note": (
+                "低评分推断（单变量筛选 + 多变量 Logistic）未完成；"
+                "以下为描述性归因结果，仅表示统计关联，不作因果判断。"
+            ),
         }
 
     screening = inference.get("screening", {})

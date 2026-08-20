@@ -115,7 +115,42 @@
       </div>
     </template>
 
-    <div v-else class="rc-caveat">（暂无结构化渲染，请查看上方文本回答）</div>
+    <!-- ============ 深度验证结果 ============ -->
+    <template v-else-if="intent === 'deep_validation'">
+      <div class="rc-row">
+        <div class="rc-metric"><span>目标</span><b>{{ d.target_label ?? '—' }}</b></div>
+        <div class="rc-metric"><span>成功模型</span><b>{{ d.successful_models ?? 0 }}</b></div>
+        <div class="rc-metric"><span>显著变量</span><b>{{ sigCount }}</b></div>
+        <div class="rc-metric"><span>未能估计</span><b>{{ d.summary?.not_estimated?.length ?? 0 }}</b></div>
+      </div>
+
+      <template v-if="featureRows.length">
+        <h4 class="rc-title">控制混杂后的验证结果</h4>
+        <GenericResult :value="featureRows" />
+      </template>
+
+      <div v-if="dvSummary" class="callout">
+        <span class="callout-label"><Lightbulb :size="13" /> 验证结论</span>
+        <span class="callout-text">{{ dvSummary }}</span>
+      </div>
+
+      <div v-if="d.caveats?.length" class="rc-caveat">{{ d.caveats.join('；') }}</div>
+    </template>
+
+    <!-- ============ 通用兜底：递归渲染任意结果结构 ============ -->
+    <div v-else class="rc-generic">
+      <div v-if="d.conclusion || d.answer" class="callout">
+        <span class="callout-label"><Lightbulb :size="13" /> 结论</span>
+        <span class="callout-text">{{ d.conclusion || d.answer }}</span>
+      </div>
+      <GenericResult :value="genericValue" />
+      <el-collapse v-if="sqlText" class="rc-detail">
+        <el-collapse-item title="查看 SQL 执行明细">
+          <div class="rc-sql">{{ sqlText }}</div>
+        </el-collapse-item>
+      </el-collapse>
+      <div v-if="caveatText" class="rc-caveat">{{ caveatText }}</div>
+    </div>
   </div>
 </template>
 
@@ -124,6 +159,7 @@ import { computed, onErrorCaptured, ref } from 'vue'
 import { ArrowRight, BarChart3, Lightbulb, Map, Table2, TrendingUp } from 'lucide-vue-next'
 import BaseChart from '../charts/BaseChart.vue'
 import DataTable from './DataTable.vue'
+import GenericResult from './GenericResult.vue'
 import { barOption, forestOption } from '../../charts'
 import { fmtNum, fmtP } from '../../format'
 
@@ -272,6 +308,53 @@ const groupChart = computed(() => {
   const labels = rows.slice(0, 10).map(r => String(r[dimKey]))
   const values = rows.slice(0, 10).map(r => (parseNum(r[vk]) ?? 0) / 100)
   return barOption(labels, values, vk)
+})
+
+// ---------- deep_validation ----------
+const featureRows = computed(() => {
+  return (props.d?.feature_results ?? []).map((r: any) => ({
+    '变量': r.label ?? r.feature,
+    '方法': r.method ?? '—',
+    '调整后 OR': r.adjusted_or != null ? fmtNum(r.adjusted_or) : '联合 Wald',
+    '95%CI': r.ci95 ? `${fmtNum(r.ci95[0])} ~ ${fmtNum(r.ci95[1])}` : '—',
+    'p 值': fmtP(r.p_adjusted ?? r.p),
+    '显著': r.significant ? '是' : (r.ok === false ? '未估计' : '否'),
+  }))
+})
+const sigCount = computed(() => props.d?.summary?.adjusted_significant?.length ?? 0)
+const dvSummary = computed(() => {
+  const s = props.d?.summary
+  if (!s) return ''
+  const parts: string[] = []
+  if (s.adjusted_significant?.length) parts.push(`显著：${s.adjusted_significant.join('、')}`)
+  if (s.adjusted_not_significant?.length) parts.push(`不显著：${s.adjusted_not_significant.join('、')}`)
+  if (s.not_estimated?.length) parts.push(`未能估计：${s.not_estimated.join('、')}`)
+  return parts.join('；')
+})
+
+// ---------- 通用兜底：提取元信息字段，剩余交给 GenericResult 递归渲染 ----------
+const META_SKIP = new Set(['sql', 'sqls', 'caveats', 'note', 'notes', 'load_profile',
+  'schema_version', 'analysis_mode', 'recommendations', 'mode', 'grain_note', 'interpretation'])
+const genericValue = computed(() => {
+  const d = props.d
+  if (!d || typeof d !== 'object' || Array.isArray(d)) return d ?? {}
+  const out: Record<string, any> = {}
+  for (const [k, v] of Object.entries(d)) {
+    if (META_SKIP.has(k)) continue
+    out[k] = v
+  }
+  return out
+})
+const sqlText = computed(() => {
+  if (props.d?.sql) return String(props.d.sql)
+  if (Array.isArray(props.d?.sqls) && props.d.sqls.length) return props.d.sqls.join('\n\n')
+  return ''
+})
+const caveatText = computed(() => {
+  const c = props.d?.caveats ?? props.d?.note
+  if (Array.isArray(c)) return c.join('；')
+  if (typeof c === 'string') return c
+  return ''
 })
 
 // ---------- 映射 ----------
