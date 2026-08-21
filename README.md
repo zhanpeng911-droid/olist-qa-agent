@@ -124,6 +124,19 @@ DEEPSEEK_MODEL=deepseek-chat
 
 三个目标使用同一证据链：按变量类型执行单变量检验 → FDR-BH 与效应量95%CI双门槛 → 共线性组保留预设直观代表 → 多变量二项Logistic（HC3稳健标准误） → 再次执行FDR与CI门槛 → 展示稳定变量对应的目标发生率分布。结果只说明观察性关联，不自动生成治理策略。
 
+## 随仓库提供的数据
+
+- `data/sample/`：每张表约1,000行的截取样本，用于离线演示和快速自动测试。
+- `data/full/`：从Olist公共数据构建的三张完整Mart表，可用于重建MySQL分析层或直接复现实验。
+
+| 文件 | 分析粒度 | 数据行数 | 大小 |
+|---|---|---:|---:|
+| `mart_order_delivery.csv` | 订单级 | 99,441 | 48.20 MB |
+| `mart_order_seller_delivery.csv` | 订单-卖家级 | 100,010 | 45.47 MB |
+| `mart_order_item_business.csv` | 商品项级 | 112,650 | 34.46 MB |
+
+完整文件的校验值和使用说明见 [`data/full/README.md`](data/full/README.md)。CSV含匿名业务标识，不包含本机数据库密码或DeepSeek API密钥。
+
 ## 项目结构
 
 ```text
@@ -131,7 +144,8 @@ olist-qa-agent/
 ├─ pyproject.toml            # uv 配置
 ├─ run.py                    # 命令行交互入口
 ├─ data/
-│  └─ sample/                # 三张 Mart 截取样本（本地文件，不提交）
+│  ├─ sample/                # 三张 Mart 截取样本（随仓库提交）
+│  └─ full/                  # 三张完整 Mart CSV
 ├─ artifacts/                # 程序生成的评测结果与运行日志
 │  ├─ evaluations/
 │  └─ runtime_logs/
