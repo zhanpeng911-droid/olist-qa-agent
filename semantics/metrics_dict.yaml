@@ -47,6 +47,7 @@ tables:
       low_score_count: {expr: "SUM(is_low_score)", desc: "低评分订单-卖家记录数"}
       low_score_rate: {expr: "AVG(is_low_score)", desc: "低评分率(评分<=3)"}
       late_rate:     {expr: "AVG(is_late_delivery)", desc: "延迟率"}
+      handover_late_rate: {expr: "AVG(is_any_item_handover_late)", desc: "交接超期率"}
       seller_price:  {expr: "SUM(seller_price)",  desc: "卖家商品金额合计"}
     dimensions:
       - seller_state      # 卖家州
@@ -55,6 +56,7 @@ tables:
       - cross_state       # 是否跨州(0/1)
       - is_multi_seller_order  # 是否多卖家订单(0/1)
       - is_late_delivery  # 是否延迟(0/1)，用于线路×延迟交叉
+      - order_month       # 购买月份(YYYY-MM)，用于交接超期趋势
     filters:
       valid_sample: *valid_sample
       reviewed_only: *reviewed_only

@@ -29,28 +29,99 @@ export function areaOption(x: string[], y: number[], name = ''): any {
 }
 
 /** 横向条形图（排行榜）：浅灰底槽 + 胶囊圆角 + 青蓝渐变 + 右侧大号百分比 */
-export function barOption(labels: string[], values: number[], name = '', opts: { max?: number } = {}): any {
+export function barOption(
+  labels: string[], values: number[], name = '',
+  opts: { max?: number; baseline?: number; baselineLabel?: string; samples?: number[] } = {},
+): any {
   const display = values.map(v => +(v * 100).toFixed(1))
+  const axisMax = opts.max ?? Math.max(5, Math.ceil(Math.max(...display, 0) / 5) * 5)
+  const sampleLabel = (index: number) => {
+    const sample = opts.samples?.[index]
+    return sample == null ? '' : ` · n=${Number(sample).toLocaleString()}`
+  }
   return {
-    tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' }, backgroundColor: '#1E2238', textStyle: { color: '#fff' } },
-    grid: { left: 90, right: 56, top: 12, bottom: 24 },
-    xAxis: { type: 'value', max: opts.max, axisLabel: { color: '#94A3B8', formatter: '{value}%' }, splitLine: { lineStyle: { color: '#F1F5F9' } } },
+    tooltip: {
+      trigger: 'axis', axisPointer: { type: 'shadow' },
+      backgroundColor: '#1E2238', borderWidth: 0, textStyle: { color: '#fff' },
+      formatter: (params: any[]) => {
+        const row = params.find((p: any) => p.seriesName === name) ?? params.at(-1)
+        return `${row?.name ?? ''}<br/>${name}：${row?.value ?? '—'}%${sampleLabel(row?.dataIndex ?? 0)}`
+      },
+    },
+    grid: { left: 90, right: opts.samples?.length ? 122 : 56, top: 26, bottom: 24 },
+    xAxis: { type: 'value', max: axisMax, axisLabel: { color: '#94A3B8', formatter: '{value}%' }, splitLine: { lineStyle: { color: '#F1F5F9' } } },
     yAxis: { type: 'category', inverse: true, data: labels, axisLabel: { color: '#64748B' }, axisLine: { show: false }, axisTick: { show: false } },
     series: [
       // 底槽：极浅灰全长圆角轨道
       {
         name: '', type: 'bar', barWidth: 18, barGap: '-100%', silent: true,
-        data: display.map(() => 100),
+        data: display.map(() => axisMax),
         itemStyle: { color: '#F1F5F9', borderRadius: 9 },
       },
       // 前景：青蓝 → 电光蓝渐变胶囊
       {
         name, type: 'bar', barWidth: 18, data: display,
-        label: { show: true, position: 'right', color: '#0F172A', fontSize: 13, fontWeight: 700, formatter: '{c}%' },
+        label: {
+          show: true, position: 'right', color: '#0F172A', fontSize: 12,
+          fontWeight: 700,
+          formatter: (p: any) => `${p.value}%${sampleLabel(p.dataIndex)}`,
+        },
         itemStyle: {
           borderRadius: 9,
           color: new echarts.graphic.LinearGradient(0, 0, 1, 0, [{ offset: 0, color: '#00C5FF' }, { offset: 1, color: '#2F65F6' }]),
         },
+        markLine: typeof opts.baseline === 'number' ? {
+          silent: true, symbol: 'none',
+          lineStyle: { color: '#F59E0B', width: 1.5, type: 'dashed' },
+          label: { show: false },
+          data: [{ xAxis: +(opts.baseline * 100).toFixed(2) }],
+        } : undefined,
+      },
+    ],
+  }
+}
+
+/** 两条比例趋势线：用于同时观察低评分率与延迟率的月度变化。 */
+export function rateTrendOption(
+  x: string[], lowScore: number[], late: number[],
+): any {
+  return {
+    tooltip: {
+      trigger: 'axis', backgroundColor: '#1E2238', borderWidth: 0,
+      textStyle: { color: '#fff', fontSize: 12 },
+      valueFormatter: (value: number) => `${Number(value).toFixed(1)}%`,
+    },
+    legend: {
+      top: 0, right: 18, itemWidth: 18, itemHeight: 8,
+      textStyle: { color: '#64748B', fontSize: 12 },
+    },
+    grid: { left: 44, right: 20, top: 38, bottom: 28 },
+    xAxis: {
+      type: 'category', data: x,
+      axisLine: { lineStyle: { color: '#E2E8F0' } },
+      axisLabel: { color: '#94A3B8' },
+    },
+    yAxis: {
+      type: 'value', axisLabel: { color: '#94A3B8', formatter: '{value}%' },
+      splitLine: { lineStyle: { color: '#F1F5F9' } },
+    },
+    series: [
+      {
+        name: '低评分率', type: 'line', smooth: 0.3, showSymbol: false,
+        data: lowScore.map(v => +(v * 100).toFixed(1)),
+        lineStyle: { width: 3, color: '#2F65F6' }, itemStyle: { color: '#2F65F6' },
+        areaStyle: {
+          color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+            { offset: 0, color: 'rgba(47,101,246,.20)' },
+            { offset: 1, color: 'rgba(47,101,246,0)' },
+          ]),
+        },
+      },
+      {
+        name: '延迟率', type: 'line', smooth: 0.3, showSymbol: false,
+        data: late.map(v => +(v * 100).toFixed(1)),
+        lineStyle: { width: 2.5, color: '#F59E0B' },
+        itemStyle: { color: '#F59E0B' },
       },
     ],
   }

@@ -4,17 +4,23 @@
 """
 import json
 import sys
-
-import requests
+from urllib.request import Request, urlopen
 
 BASE = "http://127.0.0.1:8000/api/chat"
 
 
 def chat(q: str, timeout: int = 150):
     events = {}
-    with requests.post(BASE, json={"question": q}, stream=True, timeout=timeout) as r:
+    request = Request(
+        BASE,
+        data=json.dumps({"question": q}, ensure_ascii=False).encode("utf-8"),
+        headers={"Content-Type": "application/json; charset=utf-8"},
+        method="POST",
+    )
+    with urlopen(request, timeout=timeout) as r:
         ev = None
-        for line in r.iter_lines():
+        for raw_line in r:
+            line = raw_line.strip()
             if line.startswith(b"event:"):
                 ev = line[6:].decode().strip()
             elif line.startswith(b"data:") and ev:

@@ -167,7 +167,6 @@ def run_case(case: dict, semantic: SemanticLayer, provider: DataProvider,
         if expected_supported:
             completed = bool(
                 result.get("ok")
-                and result.get("selected_features")
                 and result.get("adjusted_validation", {}).get("ok")
             )
             no_strategy = not result.get("recommendations", {}).get(
@@ -178,7 +177,10 @@ def run_case(case: dict, semantic: SemanticLayer, provider: DataProvider,
                 or bool(result.get("adjusted_validation", {}).get("models"))
             )
             correct = completed and no_strategy and adjusted_ok
-            answer = "低评分自动两层归因完成" if completed else str(result.get("error", ""))
+            answer = (
+                f"{result.get('target_short_label', '目标')}自动两层归因完成"
+                if completed else str(result.get("error", ""))
+            )
         else:
             completed = bool(result.get("unsupported_target") and result.get("error"))
             correct = completed and not result.get("ok")

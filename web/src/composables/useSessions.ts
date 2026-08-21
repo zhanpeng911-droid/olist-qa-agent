@@ -6,6 +6,7 @@ export interface ChatSession {
   id: string
   title: string
   messages: any[]
+  messageCount?: number
   updatedAt: number
 }
 

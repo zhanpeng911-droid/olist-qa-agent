@@ -35,14 +35,21 @@ from agent_core.statistical_analysis import (
 def _print_attribution(res: dict) -> None:
     if not res.get("ok"):
         print("【关联因素分析未执行】")
-        print(res.get("error", "低评分关联因素分析未完成"))
+        print(res.get("error", "关联因素分析未完成"))
         return
-    base = res["baseline"]
-    print("【低评分关联因素分析】")
-    print(f"订单级基准: 样本 {base['order']['sample']}，低评分率 "
-          f"{base['order']['low_score_rate']:.2%}")
-    print(f"卖家级基准(单卖家): 样本 {base['seller']['sample']}，低评分率 "
-          f"{base['seller']['low_score_rate']:.2%}")
+    target = res.get("target", "is_low_score")
+    target_short = res.get("target_short_label", "低评分")
+    print(f"【{res.get('target_label', '是否低评分')}关联因素分析】")
+    if target == "is_low_score":
+        base = res["baseline"]
+        print(f"订单级基准: 样本 {base['order']['sample']}，低评分率 "
+              f"{base['order']['low_score_rate']:.2%}")
+        print(f"卖家级基准(单卖家): 样本 {base['seller']['sample']}，低评分率 "
+              f"{base['seller']['low_score_rate']:.2%}")
+    else:
+        base = res["target_baseline"]
+        print(f"目标基准: 样本 {base['sample']}，{target_short}发生率 "
+              f"{base['target_rate']:.2%}")
 
     print("\n【单变量筛选：FDR校正 + 95%置信区间】")
     for row in res.get("feature_tests", []):
@@ -85,8 +92,9 @@ def _print_attribution(res: dict) -> None:
                 print(f"    {row['group']} n={row['sample']}，中位数={row['median']:.3f}")
         else:
             for row in (details or [])[:5]:
+                rate = row.get("target_rate", row.get("low_score_rate"))
                 print(f"    {row['value']} n={row['sample']}，"
-                      f"低评分率={row['low_score_rate']:.2%}，"
+                      f"{target_short}发生率={rate:.2%}，"
                       f"相对总体倍数={row.get('lift', 0):.2f}")
 
     print("\n结果边界：仅报告统计关联，不作因果判断，也不自动生成治理方案。")

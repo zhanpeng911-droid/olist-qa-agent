@@ -154,10 +154,53 @@ def test_cross_grain_pair_is_rejected():
     assert "不在同一受控分析粒度" in plan["error"]
 
 
-def test_more_than_two_variables_requires_split_or_deep_validation():
-    plan = plan_statistical_question("商品金额、运费与配送时长是否相关")
-    assert not plan["ok"]
-    assert "只能指定两个变量" in plan["error"]
+def test_more_than_two_variables_creates_batch_plan():
+    plan = plan_statistical_question("商品金额与运费、配送时长分别是否相关")
+    assert plan["ok"] and plan["batch"]
+    assert plan["anchor_variable"] == "price_total"
+    assert plan["comparison_count"] == 2
+    assert [p["variable_y"] for p in plan["comparisons"]] == [
+        "freight_total", "fulfillment_days",
+    ]
+
+
+def test_batch_statistical_question_executes_without_llm(env):
+    _, provider = env
+    question = (
+        "是否延迟与品类、运费率、商品项数量、是否多卖家订单、是否跨州、"
+        "是否存在交接超期、线路分别有显著关系"
+    )
+    result = analyze_statistical_question(provider, question)
+    assert result["ok"] and result["batch"]
+    assert result["anchor_variable"] == "is_late_delivery"
+    assert result["comparison_count"] == 7
+    assert result["successful_count"] == 7
+    assert result["failed_count"] == 0
+    assert all(row.get("p_adjusted") is not None for row in result["results"])
+    assert all(row.get("p_correction") == "FDR-BH" for row in result["results"])
+    assert {row["comparison_variable"] for row in result["results"]} == {
+        "category", "freight_ratio", "item_count", "is_multi_seller_order",
+        "cross_state", "is_any_item_handover_late", "route",
+    }
+    result_tables = {row["comparison_variable"]: row["table"] for row in result["results"]}
+    assert result_tables["category"] == "mart_order_delivery"
+    assert result_tables["freight_ratio"] == "mart_order_delivery"
+    assert result_tables["item_count"] == "mart_order_delivery"
+    assert result_tables["is_multi_seller_order"] == "mart_order_delivery"
+    assert result_tables["cross_state"] == "mart_order_seller_delivery"
+    assert result_tables["route"] == "mart_order_seller_delivery"
+    answer = format_statistical_result(result)
+    assert "FDR校正后显著" in answer and "原始p=" in answer
+
+
+def test_batch_question_accepts_common_cross_state_typo():
+    plan = plan_statistical_question(
+        "是否延迟与品类、是否跨周、线路分别有显著关系"
+    )
+    assert plan["ok"] and plan["batch"]
+    assert [p["variable_y"] for p in plan["comparisons"]] == [
+        "category", "cross_state", "route",
+    ]
 
 
 def test_mysql_compatibility_views_expose_new_duration_fields():

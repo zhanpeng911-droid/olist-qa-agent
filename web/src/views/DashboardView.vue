@@ -29,7 +29,7 @@
           </div>
           <div class="kpi-value">{{ k.value }}</div>
           <div class="kpi-spark">
-            <BaseChart v-if="k.spark && k.spark.length > 1" :option="spark(k.spark)" height="34px" />
+            <BaseChart v-if="k.spark && k.spark.length > 1" :option="spark(k.spark, k.color)" height="34px" />
             <BaseChart v-else :option="flatLine()" height="34px" />
           </div>
         </div>
@@ -39,6 +39,7 @@
       <div class="chart-grid">
         <div class="s-card chart-card">
           <h3 class="s-title">客户州 · 低评分率
+            <span class="baseline-badge">总体 {{ fmtPct(attr?.baseline?.order?.low_score_rate) }}</span>
             <span v-if="stateRanks.length" class="rank-badges">
               <span v-for="(s, i) in stateRanks" :key="s" class="rank-badge" :class="`r${i + 1}`">{{ i + 1 }} {{ s }}</span>
             </span>
@@ -50,27 +51,18 @@
           </div>
         </div>
         <div class="s-card chart-card">
-          <h3 class="s-title">低评分订单 · 支付方式构成</h3>
-          <BaseChart v-if="payDonut" :option="payDonut" height="230px" />
+          <h3 class="s-title">支付方式 · 低评分率
+            <span class="baseline-badge">总体 {{ fmtPct(attr?.baseline?.order?.low_score_rate) }}</span>
+          </h3>
+          <BaseChart v-if="payRateBar" :option="payRateBar" height="280px" />
           <div v-else class="empty-panel">
             <el-empty description="无支付方式分组：分组未达到最小样本门槛，或当前无有效样本" :image-size="60" />
             <el-button size="small" :icon="Refresh" @click="load">刷新数据</el-button>
           </div>
-          <!-- 2×2 图例网格（卡片化，拒绝单行横排挤压） -->
-          <div v-if="payLegend.length" class="donut-legend">
-            <div v-for="(lg, i) in payLegend" :key="lg.label" class="lg-item">
-              <span class="lg-dot" :style="{ background: lg.color }"></span>
-              <span class="lg-name">{{ lg.label }}</span>
-              <span class="lg-nums">
-                <span class="lg-count">{{ lg.count }}</span>
-                <span class="lg-pct">{{ lg.pct }}</span>
-              </span>
-            </div>
-          </div>
         </div>
         <div class="s-card chart-card wide">
-          <h3 class="s-title">低评分率 · 月度趋势</h3>
-          <BaseChart v-if="trendArea" :option="trendArea" height="240px" />
+          <h3 class="s-title">低评分率与延迟率 · 月度趋势</h3>
+          <BaseChart v-if="trendComparison" :option="trendComparison" height="250px" />
           <div v-else class="empty-panel">
             <el-empty description="暂无月度趋势数据（有效月份少于 2 个）" :image-size="60" />
             <el-button size="small" :icon="Refresh" @click="load">刷新数据</el-button>
@@ -84,7 +76,7 @@
         <span v-for="n in notices" :key="n">{{ n }}</span>
       </div>
 
-      <p class="data-note">数据来源：低评分关联因素分析（{{ sourceLabel }}）· 口径：低评分 = 评分 ≤ 3 · 有效样本 {{ baseSample }} 单</p>
+      <p class="data-note">数据来源：Olist Mart 分析层（{{ sourceLabel }}）· 低评分 = 评分 ≤ 3 · 延迟 = 实际送达晚于预计日期 · 各指标样本见卡片右上角</p>
     </template>
   </div>
 </template>
@@ -94,14 +86,21 @@ import { computed, onMounted, ref } from 'vue'
 import { InfoFilled, Refresh } from '@element-plus/icons-vue'
 import BaseChart from '../components/charts/BaseChart.vue'
 import { getDashboard } from '../api'
-import { areaOption, barOption, donutOption, sparklineOption as spark, flatLineOption as flatLine } from '../charts'
+import { barOption, rateTrendOption, sparklineOption as spark, flatLineOption as flatLine } from '../charts'
+import { finiteNumber, fmtNum, fmtPct } from '../format'
 
 const loading = ref(true)
 const error = ref('')
 const attr = ref<any>(null)
 const lateRate = ref<number | null>(null)
+const lateSample = ref<number | null>(null)
+const handoverRate = ref<number | null>(null)
+const handoverSample = ref<number | null>(null)
 const avgScore = ref<number | null>(null)
+const avgScoreSample = ref<number | null>(null)
 const trend = ref<any[]>([])
+const lateTrend = ref<any[]>([])
+const handoverTrend = ref<any[]>([])
 
 const sourceLabel = computed(() => attr.value?.source_label ?? '演示样本')
 const baseSample = computed(() => attr.value?.baseline?.order?.sample ?? 0)
@@ -135,24 +134,35 @@ const kpis = computed(() => {
         .filter((r: any) => (r._m_order_count ?? 100) >= 10)
         .map((r: any) => r._m_low_score_rate)
     : []
+  const cleanLateTrend = lateTrend.value
+    .filter((r: any) => (r._m_order_count ?? 0) >= 10)
+    .map((r: any) => r._m_late_rate)
+  const cleanHandoverTrend = handoverTrend.value
+    .filter((r: any) => (r._m_record_count ?? 0) >= 10)
+    .map((r: any) => r._m_handover_late_rate)
+  const cleanScoreTrend = trend.value
+    .filter((r: any) => (r._m_order_count ?? 0) >= 10)
+    .map((r: any) => r._m_avg_review_score)
   return [
     {
       label: '低评分率', value: fmtPct(lowRate),
       pillText: `样本 ${baseSample}`,
-      spark: cleanTrend,
+      spark: cleanTrend, color: '#2F65F6',
     },
     {
       label: '延迟率', value: lateRate.value == null ? '—' : fmtPct(lateRate.value),
-      pillText: lateRate.value == null ? '待全量数据' : '全量',
-      spark: [],
+      pillText: lateSample.value == null ? '有效订单' : `样本 ${Number(lateSample.value).toLocaleString()}`,
+      spark: cleanLateTrend, color: '#F59E0B',
     },
     {
-      label: '有效样本', value: baseSample,
-      pillText: '订单级', spark: [],
+      label: '交接超期率', value: handoverRate.value == null ? '—' : fmtPct(handoverRate.value),
+      pillText: handoverSample.value == null ? '订单-卖家级' : `样本 ${Number(handoverSample.value).toLocaleString()}`,
+      spark: cleanHandoverTrend, color: '#8B5CF6',
     },
     {
-      label: '平均评分', value: avgScore.value?.toFixed(2) ?? '—',
-      pillText: '5 分制', spark: [],
+      label: '平均评分', value: fmtNum(avgScore.value),
+      pillText: avgScoreSample.value == null ? '5 分制' : `样本 ${Number(avgScoreSample.value).toLocaleString()}`,
+      spark: cleanScoreTrend, color: '#10B981',
     },
   ]
 })
@@ -163,7 +173,17 @@ const stateBar = computed(() => {
     .sort((a: any, b: any) => (b.low_score_rate ?? 0) - (a.low_score_rate ?? 0))
     .slice(0, 8)
   if (!gs.length) return null
-  return barOption(gs.map((g: any) => g.value), gs.map((g: any) => g.low_score_rate), '低评分率', { max: 35 })
+  return barOption(
+    gs.map((g: any) => g.value),
+    gs.map((g: any) => g.low_score_rate),
+    '低评分率',
+    {
+      max: 35,
+      baseline: attr.value?.baseline?.order?.low_score_rate,
+      baselineLabel: '总体',
+      samples: gs.map((g: any) => g.sample),
+    },
+  )
 })
 
 // Top3 排行徽章（与条形图降序一致）
@@ -179,46 +199,44 @@ const PAY_LABEL: Record<string, string> = {
   credit_card: '信用卡支付', boleto: 'Boleto 现金券', voucher: '代金券',
   debit_card: '借记卡', not_defined: '未定义',
 }
-// 与 charts.ts donutOption 的 color 数组保持一致，供 HTML 图例取色
-const DONUT_COLORS = ['#2F65F6', '#00C5FF', '#38BDF8', '#10B981', '#F59E0B', '#F43F5E', '#8B5CF6']
-
-// 低评分订单的支付方式构成（计数占比，凑满 100%）
-const payDonut = computed(() => {
-  const gs = groupsOf('primary_payment_type').slice(0, 6)
+// 直接比较各支付方式的低评分率；构成占比会被支付方式使用规模主导，解释价值较低。
+const payRateBar = computed(() => {
+  const gs = groupsOf('primary_payment_type')
+    .slice()
+    .sort((a: any, b: any) => (b.low_score_rate ?? 0) - (a.low_score_rate ?? 0))
+    .slice(0, 6)
   if (!gs.length) return null
-  const total = gs.reduce((s, g) => s + (g.low_score_count ?? 0), 0)
-  if (!total) return null
-  const values = gs.map((g: any) => g.low_score_count ?? 0)
-  const labels = gs.map((g: any) => PAY_LABEL[g.value] ?? g.value)
-  return donutOption(labels, values, String(total))
+  return barOption(
+    gs.map((g: any) => PAY_LABEL[g.value] ?? g.value),
+    gs.map((g: any) => finiteNumber(g.low_score_rate) ?? 0),
+    '低评分率',
+    {
+      baseline: attr.value?.baseline?.order?.low_score_rate,
+      baselineLabel: '总体',
+      samples: gs.map((g: any) => finiteNumber(g.sample) ?? 0),
+    },
+  )
 })
 
-// 2×2 卡片化图例数据（名称 / 单量 / 占比 / 色块）
-const payLegend = computed(() => {
-  const gs = groupsOf('primary_payment_type').slice(0, 6)
-  const total = gs.reduce((s, g) => s + (g.low_score_count ?? 0), 0)
-  if (!total) return []
-  return gs.map((g: any, i: number) => ({
-    label: PAY_LABEL[g.value] ?? g.value,
-    count: (g.low_score_count ?? 0).toLocaleString(),
-    pct: `${(((g.low_score_count ?? 0) / total) * 100).toFixed(0)}%`,
-    color: DONUT_COLORS[i % DONUT_COLORS.length],
-  }))
-})
-
-// 过滤冷启动小样本月（如 2016-10 仅 2 单），再画趋势
-const trendArea = computed(() => {
-  const rows = trend.value
+// 过滤冷启动小样本月；按月份对齐低评分率（有评价订单）与延迟率（有效订单）。
+const trendComparison = computed(() => {
+  const lowRows = trend.value
     .filter((r: any) => (r._m_order_count ?? 100) >= 10)
     .slice()
     .sort((a: any, b: any) => (a.order_month < b.order_month ? -1 : 1))
+  const lateByMonth = new Map(
+    lateTrend.value
+      .filter((r: any) => (r._m_order_count ?? 100) >= 10)
+      .map((r: any) => [r.order_month, r._m_late_rate]),
+  )
+  const rows = lowRows.filter((r: any) => lateByMonth.has(r.order_month))
   if (rows.length < 2) return null
-  return areaOption(rows.map((r: any) => r.order_month), rows.map((r: any) => r._m_low_score_rate), '低评分率')
+  return rateTrendOption(
+    rows.map((r: any) => r.order_month),
+    rows.map((r: any) => r._m_low_score_rate),
+    rows.map((r: any) => lateByMonth.get(r.order_month) as number),
+  )
 })
-
-function fmtPct(v: number | undefined | null) {
-  return v == null ? '—' : (v * 100).toFixed(1) + '%'
-}
 
 async function load() {
   loading.value = true
@@ -228,8 +246,14 @@ async function load() {
     const d = await getDashboard()
     attr.value = d
     lateRate.value = d.late_rate ?? null
+    lateSample.value = d.late_sample ?? null
+    handoverRate.value = d.handover_late_rate ?? null
+    handoverSample.value = d.handover_sample ?? null
     avgScore.value = d.avg_review_score ?? null
+    avgScoreSample.value = d.avg_score_sample ?? null
     trend.value = d.trend ?? []
+    lateTrend.value = d.late_trend ?? []
+    handoverTrend.value = d.handover_trend ?? []
   } catch (e: any) {
     error.value = String(e?.message ?? e)
   } finally {
@@ -262,19 +286,11 @@ onMounted(load)
 .rank-badge.r1 { color: #fff; background: linear-gradient(135deg, #2F65F6, #00C5FF); border: none; }
 .rank-badge.r2 { color: #4338CA; background: #EEF2FF; }
 .rank-badge.r3 { color: #0369A1; background: #E0F2FE; }
-
-/* 支付方式 2×2 卡片化图例网格（严格两列对齐） */
-.donut-legend {
-  display: grid; grid-template-columns: 1fr 1fr; gap: 8px 20px;
-  margin-top: 12px; padding: 12px 14px;
-  background: var(--bg); border-radius: var(--radius-md);
+.baseline-badge {
+  font-size: 11px; font-weight: 700; color: #B45309;
+  background: #FFFBEB; border: 1px solid #FDE68A;
+  padding: 2px 9px; border-radius: var(--radius-pill);
 }
-.lg-item { display: flex; align-items: center; gap: 8px; min-width: 0; }
-.lg-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
-.lg-name { font-size: 12px; color: var(--text-2); flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.lg-nums { display: flex; align-items: baseline; gap: 8px; flex-shrink: 0; }
-.lg-count { font-size: 12px; font-weight: 700; color: var(--text-1); white-space: nowrap; }
-.lg-pct { font-size: 12px; font-weight: 600; color: var(--text-3); white-space: nowrap; }
 
 .notice-bar {
   display: flex; align-items: center; gap: 14px; flex-wrap: wrap;

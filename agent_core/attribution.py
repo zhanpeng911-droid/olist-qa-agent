@@ -16,6 +16,7 @@ import pandas as pd
 from .data_provider import DataProvider, SAMPLE_SOURCE_LABEL
 from .low_score_attribution import run_low_score_attribution
 from .semantic import SemanticLayer
+from .target_attribution import TARGET_SPECS, run_target_attribution
 from .statistics import (
     categorical_test_counts, multiple_correction,
 )
@@ -25,7 +26,7 @@ ORDER_TABLE = "mart_order_delivery"
 SELLER_TABLE = "mart_order_seller_delivery"
 ORDER_COUNT_METRIC = "order_count"
 SELLER_COUNT_METRIC = "record_count"
-ATTRIBUTION_SCHEMA_VERSION = "2026-08-16.5"
+ATTRIBUTION_SCHEMA_VERSION = "2026-08-21.2"
 
 # 候选因素维度（订单级 / 卖家级）
 ORDER_DIMENSIONS = [
@@ -70,23 +71,39 @@ FEATURE_LABELS = {
 LOW_SCORE_TARGET_HINTS = (
     "低评分", "差评", "低分", "三星及以下", "1-3分", "评价不好",
 )
+HANDOVER_TARGET_HINTS = (
+    "交接超期", "晚交接", "交接延误", "发货超期", "揽收超期",
+)
+DELIVERY_TARGET_HINTS = (
+    "延迟", "配送延误", "送达延误", "晚到", "未按时送达", "逾期送达",
+)
 UNSUPPORTED_ATTRIBUTION_TARGET_HINTS = (
-    "延迟", "复购", "销售额", "成交额", "订单量", "客单价", "运费", "金额",
+    "复购", "销售额", "成交额", "订单量", "客单价", "运费", "金额", "退款",
 )
 
 
-def supports_attribution_target(question: str | None) -> bool:
-    """当前只接受低评分归因；未明确目标的“归因分析”默认指低评分。"""
+def resolve_attribution_target(question: str | None) -> str | None:
+    """识别三个受控目标；未点名目标的“归因分析”兼容为低评分归因。"""
     if not question:
-        return True
+        return "is_low_score"
     if any(hint in question for hint in LOW_SCORE_TARGET_HINTS):
-        return True
-    # “请进行归因分析”没有明确目标时仍按低评分处理；一旦用户以
-    # “对X进行归因 / 对X原因归因 / 对X做归因”明确点名了其他目标，则拒绝，不静默偷换目标。
+        return "is_low_score"
+    if any(hint in question for hint in HANDOVER_TARGET_HINTS):
+        return "is_any_item_handover_late"
+    if any(hint in question for hint in DELIVERY_TARGET_HINTS):
+        return "is_late_delivery"
+    # 没有明确目标时仍按既有行为处理为低评分；明确点名其他目标则拒绝，
+    # 防止把复购、退款等问题静默替换成低评分模型。
     explicit_target = re.search(r"对(.{1,20}?)(?:进行|做)?(?:原因)?(?:归因|原因分析)", question)
     if explicit_target:
-        return False
-    return not any(hint in question for hint in UNSUPPORTED_ATTRIBUTION_TARGET_HINTS)
+        return None
+    if any(hint in question for hint in UNSUPPORTED_ATTRIBUTION_TARGET_HINTS):
+        return None
+    return "is_low_score"
+
+
+def supports_attribution_target(question: str | None) -> bool:
+    return resolve_attribution_target(question) is not None
 
 
 def build_feature_test_catalog(verification: dict,
@@ -608,19 +625,27 @@ def analyze_routes(provider: DataProvider, semantic: SemanticLayer,
 def run_attribution(provider: DataProvider, semantic: SemanticLayer,
                     include_logistic: bool = False,
                     question: str | None = None) -> dict:
-    """低评分专用归因：第一层筛查后自动进入调整后Logistic。
+    """三个有时间顺序的二分类目标：第一层筛查后自动进入调整后Logistic。
 
     include_logistic 参数仅为兼容旧调用；新流程始终运行受控的自动调整模型，
     且永不生成治理策略。
     """
-    if not supports_attribution_target(question):
+    target_name = resolve_attribution_target(question)
+    if target_name is None:
         return {
             "ok": False, "unsupported_target": True,
             "error": (
-                "当前自动化关联因素分析只支持“是否低评分（review_score≤3）”作为目标变量；"
+                "当前自动化关联因素分析支持“是否交接超期、是否最终延迟、"
+                "是否低评分（review_score≤3）”三个目标；"
                 "若需分析其他目标，可先进行双变量统计检验或指标查询。"
             ),
         }
+    if target_name in TARGET_SPECS:
+        return run_target_attribution(
+            provider, target_name, min_group_sample=semantic.guards.get(
+                "min_group_sample", 100
+            )
+        )
     tools = Tools(provider, semantic)
     min_sample = semantic.guards.get("min_group_sample", 100)
     sqls: list[str] = []
@@ -667,6 +692,12 @@ def run_attribution(provider: DataProvider, semantic: SemanticLayer,
         return {
             "ok": False,
             "schema_version": ATTRIBUTION_SCHEMA_VERSION,
+            "target": "is_low_score",
+            "target_label": "是否低评分",
+            "target_short_label": "低评分",
+            "target_positive_label": "低评分",
+            "target_negative_label": "非低评分",
+            "target_rate": order_base["low_score_rate"],
             "error": inference.get("error", "低评分关联因素分析未完成"),
             "baseline": {"order": order_base, "seller": seller_base},
             "factors": {"order": order_groups, "seller": seller_groups},
@@ -809,6 +840,19 @@ def run_attribution(provider: DataProvider, semantic: SemanticLayer,
     return {
         "ok": True,
         "schema_version": ATTRIBUTION_SCHEMA_VERSION,
+        "target": "is_low_score",
+        "target_label": "是否低评分",
+        "target_short_label": "低评分",
+        "target_positive_label": "低评分",
+        "target_negative_label": "非低评分",
+        "target_rate": order_base["low_score_rate"],
+        "target_baseline": {
+            "table": ORDER_TABLE,
+            "sample": order_base.get("sample"),
+            "target_count": order_base.get("low_score_count"),
+            "target_rate": order_base["low_score_rate"],
+            "sql": order_base.get("sql"),
+        },
         "baseline": {"order": order_base, "seller": seller_base},
         "factors": {"order": order_groups, "seller": seller_groups},
         "priorities": priorities,
@@ -830,7 +874,7 @@ def run_attribution(provider: DataProvider, semantic: SemanticLayer,
         "sqls": sqls,
         "analysis_mode": "automatic_adjusted_attribution",
         "note": (
-            "当前仅支持以是否低评分为目标的关联因素分析：先按FDR与95%置信区间完成"
+            "本次以是否低评分为目标：先按FDR与95%置信区间完成"
             "单变量筛选，再运行预设的多变量Logistic模型；仅对控制其他因素后仍显著"
             "的变量展示分布与对象明细，不作因果判断或治理建议。"
         ),

@@ -1,4 +1,4 @@
-"""低评分专用归因：两层门槛、共线性规则、自动调整与输出边界。"""
+"""三目标归因：时间顺序、两层门槛、共线性规则与输出边界。"""
 from __future__ import annotations
 
 import sys
@@ -28,18 +28,86 @@ def result():
         provider.close()
 
 
-def test_only_low_score_target_is_supported():
+@pytest.fixture(scope="module")
+def delay_result():
     provider = ProjectCsvProvider()
     try:
-        for question in ("请对延迟进行归因", "请对复购进行归因", "对销售额进行原因分析"):
+        yield run_attribution(
+            provider, SemanticLayer(), question="请对延迟进行归因分析"
+        )
+    finally:
+        provider.close()
+
+
+@pytest.fixture(scope="module")
+def handover_result():
+    provider = ProjectCsvProvider()
+    try:
+        yield run_attribution(
+            provider, SemanticLayer(), question="请对交接超期进行归因分析"
+        )
+    finally:
+        provider.close()
+
+
+def test_three_ordered_targets_are_supported(delay_result, handover_result):
+    assert delay_result["ok"] and delay_result["target"] == "is_late_delivery"
+    assert handover_result["ok"]
+    assert handover_result["target"] == "is_any_item_handover_late"
+
+
+def test_other_attribution_targets_are_rejected():
+    provider = ProjectCsvProvider()
+    try:
+        for question in ("请对复购进行归因", "对销售额进行原因分析", "请分析退款原因"):
             unsupported = run_attribution(
                 provider, SemanticLayer(), question=question
             )
             assert unsupported["ok"] is False
             assert unsupported["unsupported_target"] is True
-            assert "只支持" in unsupported["error"]
+            assert "三个目标" in unsupported["error"]
     finally:
         provider.close()
+
+
+def test_target_candidates_respect_business_time_order(delay_result, handover_result):
+    delay_features = {row["feature"] for row in delay_result["feature_tests"]}
+    assert "is_any_item_handover_late" in delay_features
+    assert "is_low_score" not in delay_features
+    assert not ({"delay_bucket", "late_days", "fulfillment_days"} & delay_features)
+
+    handover_features = {row["feature"] for row in handover_result["feature_tests"]}
+    assert "is_late_delivery" not in handover_features
+    assert "is_low_score" not in handover_features
+    assert "is_any_item_handover_late" not in handover_features
+
+
+@pytest.mark.parametrize("fixture_name", ["delay_result", "handover_result"])
+def test_generic_targets_use_dual_screening_gate(request, fixture_name):
+    target_result = request.getfixturevalue(fixture_name)
+    for row in target_result["feature_tests"]:
+        if not row.get("ok"):
+            continue
+        assert row["significant"] is (
+            row["p_adjusted"] < ALPHA
+            and bool(row["ci_passed"])
+            and row.get("assumption_ok") is not False
+        )
+
+
+@pytest.mark.parametrize("fixture_name", ["delay_result", "handover_result"])
+def test_generic_target_models_and_visuals_are_target_specific(request, fixture_name):
+    target_result = request.getfixturevalue(fixture_name)
+    for model in target_result["adjusted_validation"]["models"]:
+        assert model["formula"].startswith(f"{target_result['target']} ~")
+        assert "is_low_score" not in model["formula"]
+        if target_result["target"] == "is_any_item_handover_late":
+            assert "is_late_delivery" not in model["formula"]
+    stable = {row["feature"] for row in target_result["adjusted_features"]}
+    explained = {row["feature"] for row in target_result["adjusted_explanations"]}
+    assert explained == stable
+    assert all("target_visualization" in row
+               for row in target_result["adjusted_explanations"])
 
 
 def test_first_layer_uses_fdr_and_confidence_interval(result):

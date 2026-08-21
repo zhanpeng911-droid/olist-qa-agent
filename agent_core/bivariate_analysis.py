@@ -20,6 +20,7 @@ from .statistics import (
     correlation_test,
     distribution_test,
     load_table,
+    multiple_correction,
     trend_test,
 )
 
@@ -130,7 +131,8 @@ VARIABLE_SPECS = (
     # 分类/二分类维度
     VariableSpec("route", "线路", "categorical", ("州际线路", "配送线路", "线路", "路线"),
                  {SELLER_TABLE: "route"}),
-    VariableSpec("cross_state", "是否跨州", "binary", ("是否跨州", "跨州与否", "跨州", "跨省"),
+    VariableSpec("cross_state", "是否跨州", "binary",
+                 ("是否跨州", "是否跨周", "跨州与否", "跨州", "跨省"),
                  {SELLER_TABLE: "cross_state", ITEM_TABLE: "is_cross_state"}),
     VariableSpec("seller_state", "卖家州", "categorical", ("卖家州", "卖家地区"),
                  {SELLER_TABLE: "seller_state", ITEM_TABLE: "seller_state"}),
@@ -145,7 +147,7 @@ VARIABLE_SPECS = (
                  {ORDER_TABLE: "primary_payment_type"}),
     VariableSpec("is_multi_seller_order", "是否多卖家订单", "binary",
                  ("是否多卖家", "多卖家订单", "多商家订单"),
-                 {SELLER_TABLE: "is_multi_seller_order"}),
+                 {ORDER_TABLE: "is_multi_seller_order", SELLER_TABLE: "is_multi_seller_order"}),
     VariableSpec("is_multi_payment_method", "是否多支付方式", "binary",
                  ("是否多支付方式", "多支付方式"),
                  {ORDER_TABLE: "is_multi_payment_method"}),
@@ -213,7 +215,7 @@ def _choose_table(x: VariableSpec, y: VariableSpec, question: str) -> str | None
             and ITEM_TABLE in common:
         return ITEM_TABLE
     seller_names = {"route", "distance_km", "seller_state", "cross_state",
-                    "is_multi_seller_order", "is_any_item_handover_late"}
+                    "is_any_item_handover_late"}
     if {x.name, y.name} & seller_names and SELLER_TABLE in common:
         return SELLER_TABLE
     for table in (ORDER_TABLE, SELLER_TABLE, ITEM_TABLE):
@@ -235,6 +237,41 @@ def _method_for(x: VariableSpec, y: VariableSpec) -> str:
     if "categorical" in kinds and ("numeric" in kinds or "ordinal" in kinds):
         return "kruskal_wallis"
     return "pearson_chi_square"
+
+
+def _plan_pair(x: VariableSpec, y: VariableSpec, question: str,
+               *, first_is_target: bool = False) -> dict:
+    """为一对变量生成确定性计划；批量模式下首变量固定为检验目标。"""
+    table = _choose_table(x, y, question)
+    if table is None:
+        return {
+            "ok": False,
+            "variable_x": x.name, "variable_x_label": x.label,
+            "variable_y": y.name, "variable_y_label": y.label,
+            "error": (
+                f"{x.label}与{y.label}不在同一受控分析粒度中，当前禁止跨表自由连接。"
+                "请改用同一订单、订单-卖家或商品项粒度的变量。"
+            ),
+        }
+    method = _method_for(x, y)
+    # 单次检验兼容旧版 factor/target 字段；批量检验把首变量固定为结果，
+    # 使二分类 OR 的方向始终为“候选因素 → 检验目标”。
+    if first_is_target:
+        factor_spec, target_spec = y, x
+    elif x.name in RATING_VARIABLES and y.name not in RATING_VARIABLES:
+        factor_spec, target_spec = y, x
+    else:
+        factor_spec, target_spec = x, y
+    return {
+        "ok": True,
+        "variable_x": x.name, "variable_x_label": x.label, "x_kind": x.kind,
+        "variable_y": y.name, "variable_y_label": y.label, "y_kind": y.kind,
+        "x_field": x.fields[table], "y_field": y.fields[table],
+        "table": table, "grain": TABLE_GRAINS[table], "method": method,
+        "factor": factor_spec.fields[table], "factor_label": factor_spec.label,
+        "factor_kind": factor_spec.kind,
+        "target": target_spec.fields[table], "target_label": target_spec.label,
+    }
 
 
 def plan_statistical_question(question: str) -> dict:
@@ -261,36 +298,27 @@ def plan_statistical_question(question: str) -> dict:
             "error": f"未识别要检验的因素或两个变量（当前识别：{found}）。请明确写成“变量A与变量B是否显著相关”。",
         }
     if len(variables) > 2:
+        anchor = variables[0]
+        comparisons = [
+            # 每一对变量独立选择分析粒度，避免原句中某个“商品项/线路”关键词
+            # 污染其他候选变量的表选择。
+            _plan_pair(
+                anchor,
+                candidate,
+                f"{anchor.label}与{candidate.label}",
+                first_is_target=True,
+            )
+            for candidate in variables[1:]
+        ]
         return {
-            "ok": False,
-            "error": "一次双变量检验只能指定两个变量；多个变量请拆成两两问题，或明确使用“深度验证”。",
+            "ok": True, "batch": True, "method": "batch_bivariate",
+            "anchor_variable": anchor.name,
+            "anchor_variable_label": anchor.label,
+            "anchor_kind": anchor.kind,
+            "comparison_count": len(comparisons),
+            "comparisons": comparisons,
         }
-    x, y = variables
-    table = _choose_table(x, y, question)
-    if table is None:
-        return {
-            "ok": False,
-            "error": (
-                f"{x.label}与{y.label}不在同一受控分析粒度中，当前禁止跨表自由连接。"
-                "请改用同一订单、订单-卖家或商品项粒度的变量。"
-            ),
-        }
-    method = _method_for(x, y)
-    # 兼容旧版 factor/target 字段：评价变量仍作为 target；一般问题按文本顺序。
-    if x.name in RATING_VARIABLES and y.name not in RATING_VARIABLES:
-        factor_spec, target_spec = y, x
-    else:
-        factor_spec, target_spec = x, y
-    return {
-        "ok": True,
-        "variable_x": x.name, "variable_x_label": x.label, "x_kind": x.kind,
-        "variable_y": y.name, "variable_y_label": y.label, "y_kind": y.kind,
-        "x_field": x.fields[table], "y_field": y.fields[table],
-        "table": table, "grain": TABLE_GRAINS[table], "method": method,
-        "factor": factor_spec.fields[table], "factor_label": factor_spec.label,
-        "factor_kind": factor_spec.kind,
-        "target": target_spec.fields[table], "target_label": target_spec.label,
-    }
+    return _plan_pair(variables[0], variables[1], question)
 
 
 def _where(plan: dict) -> str:
@@ -327,7 +355,7 @@ def _load_pair(provider: DataProvider, plan: dict) -> tuple[pd.DataFrame, list[s
 def _spearman(provider: DataProvider, plan: dict) -> dict:
     df, sqls = _load_pair(provider, plan)
     if len(df) < 3 or df["x_value"].nunique() < 2 or df["y_value"].nunique() < 2:
-        return {"ok": False, "error": "有效样本不足或变量没有变异", **plan, "sqls": sqls}
+        return {**plan, "ok": False, "error": "有效样本不足或变量没有变异", "sqls": sqls}
     test = correlation_test(df, "x_value", "y_value")
     return {
         "ok": True, **plan, **test, "sample": test["n"],
@@ -348,7 +376,7 @@ def _mann_whitney(provider: DataProvider, plan: dict) -> dict:
         group_label, numeric_label = plan["variable_y_label"], plan["variable_x_label"]
     test = distribution_test(df, numeric, group)
     if "error" in test:
-        return {"ok": False, **plan, **test, "sqls": sqls}
+        return {**plan, **test, "ok": False, "sqls": sqls}
     return {
         "ok": True, **plan, **test,
         "method_label": "Mann–Whitney U 检验",
@@ -369,7 +397,7 @@ def _trend(provider: DataProvider, plan: dict) -> dict:
         score_label, target_label = plan["variable_y_label"], plan["variable_x_label"]
     test = trend_test(df, score, target)
     if "error" in test:
-        return {"ok": False, **plan, **test, "sqls": sqls}
+        return {**plan, **test, "ok": False, "sqls": sqls}
     return {
         "ok": True, **plan, **test,
         "method_label": "Cochran–Armitage 趋势检验",
@@ -393,7 +421,7 @@ def _binary_association(provider: DataProvider, plan: dict) -> dict:
         [counts.get((1, 0), 0), counts.get((1, 1), 0)],
     ], dtype=float)
     if not matrix.sum() or (matrix.sum(axis=0) == 0).any() or (matrix.sum(axis=1) == 0).any():
-        return {"ok": False, "error": "二分类列联表存在空组", **plan, "sql": sql}
+        return {**plan, "ok": False, "error": "二分类列联表存在空组", "sql": sql}
     _, _, _, expected = stats.chi2_contingency(matrix)
     if (expected < 5).any() or (matrix < 5).any():
         odds, p = stats.fisher_exact(matrix)
@@ -419,10 +447,10 @@ def _categorical_association(provider: DataProvider, plan: dict) -> dict:
     )
     rows = provider.execute(sql)
     if len(rows) >= 10001:
-        return {"ok": False, "error": "分类组合超过10000个，无法在当前安全上限内可靠检验", **plan, "sql": sql}
+        return {**plan, "ok": False, "error": "分类组合超过10000个，无法在当前安全上限内可靠检验", "sql": sql}
     raw = pd.DataFrame(rows).dropna(subset=[x, y])
     if raw.empty:
-        return {"ok": False, "error": "有效样本为空", **plan, "sql": sql}
+        return {**plan, "ok": False, "error": "有效样本为空", "sql": sql}
     total = int(raw["n"].sum())
     min_group = max(20, math.ceil(total * 0.0005))
     x_totals = raw.groupby(x)["n"].sum()
@@ -433,7 +461,7 @@ def _categorical_association(provider: DataProvider, plan: dict) -> dict:
     pivot = kept.pivot_table(index=x, columns=y, values="n", aggfunc="sum", fill_value=0)
     pivot = pivot.loc[pivot.sum(axis=1) > 0, pivot.sum(axis=0) > 0]
     if min(pivot.shape, default=0) < 2:
-        return {"ok": False, "error": f"达到最小样本量{min_group}的有效分组不足", **plan, "sql": sql}
+        return {**plan, "ok": False, "error": f"达到最小样本量{min_group}的有效分组不足", "sql": sql}
     chi2, p, dof, expected = stats.chi2_contingency(pivot.to_numpy(dtype=float))
     n = int(pivot.to_numpy().sum())
     denom = n * max(1, min(pivot.shape) - 1)
@@ -466,7 +494,7 @@ def _kruskal(provider: DataProvider, plan: dict) -> dict:
     keep = list(counts[counts >= min_group].index[:200])
     groups = [df.loc[df[group] == key, value].dropna().to_numpy(dtype=float) for key in keep]
     if len(groups) < 2:
-        return {"ok": False, "error": f"达到最小样本量{min_group}的分组不足两个", **plan, "sqls": sqls}
+        return {**plan, "ok": False, "error": f"达到最小样本量{min_group}的分组不足两个", "sqls": sqls}
     h, p = stats.kruskal(*groups)
     n, k = sum(map(len, groups)), len(groups)
     epsilon = max(0.0, min(1.0, (float(h) - k + 1) / (n - k))) if n > k else 0.0
@@ -487,10 +515,20 @@ def _kruskal(provider: DataProvider, plan: dict) -> dict:
     }
 
 
-def analyze_statistical_question(provider: DataProvider, question: str) -> dict:
-    plan = plan_statistical_question(question)
-    if not plan.get("ok"):
-        return plan
+def _effect_text(result: dict) -> str:
+    effect = result.get("effect_size")
+    if isinstance(effect, (int, float)):
+        return f"{result.get('effect_name', '效应量')}={effect:.4g}"
+    odds = result.get("or")
+    if isinstance(odds, (int, float)):
+        return f"OR={odds:.4g}"
+    z_value = result.get("z")
+    if isinstance(z_value, (int, float)):
+        return f"Z={z_value:.4g}"
+    return "—"
+
+
+def _execute_single(provider: DataProvider, plan: dict) -> dict:
     handlers = {
         "spearman": _spearman,
         "mann_whitney_u": _mann_whitney,
@@ -502,7 +540,7 @@ def analyze_statistical_question(provider: DataProvider, question: str) -> dict:
     try:
         result = handlers[plan["method"]](provider, plan)
     except (TypeError, ValueError, KeyError) as exc:
-        return {"ok": False, **plan, "error": f"统计计算失败：{exc}"}
+        return {**plan, "ok": False, "error": f"统计计算失败：{exc}"}
     if not result.get("ok"):
         return result
     p = result.get("p")
@@ -526,9 +564,127 @@ def analyze_statistical_question(provider: DataProvider, question: str) -> dict:
     return result
 
 
+def _analyze_batch(provider: DataProvider, plan: dict) -> dict:
+    """以首变量为目标逐项检验，并对本批全局 p 值执行 FDR-BH 校正。"""
+    results: list[dict] = []
+    corrected_indexes: list[int] = []
+    pvalues: list[float] = []
+    for comparison in plan["comparisons"]:
+        if comparison.get("ok"):
+            result = _execute_single(provider, comparison)
+        else:
+            result = dict(comparison)
+        result["comparison_variable"] = comparison.get("variable_y")
+        result["comparison_label"] = comparison.get("variable_y_label", "未识别变量")
+        results.append(result)
+        p = result.get("p")
+        if result.get("ok") and isinstance(p, (int, float)) and math.isfinite(float(p)):
+            corrected_indexes.append(len(results) - 1)
+            pvalues.append(float(p))
+
+    if pvalues:
+        correction = multiple_correction(pvalues, method="fdr_bh")
+        for position, p_adjusted, rejected in zip(
+            corrected_indexes,
+            correction["p_adjusted"],
+            correction["significant"],
+        ):
+            row = results[position]
+            row["significant_raw"] = bool(row.get("significant"))
+            row["p_adjusted"] = p_adjusted
+            row["p_correction"] = "FDR-BH"
+            row["significant"] = bool(rejected and row.get("assumption_ok") is not False)
+            row["effect_text"] = _effect_text(row)
+            if row.get("assumption_ok") is False:
+                row["conclusion"] = "检验前提未满足，当前不能可靠判断"
+            elif row["significant"]:
+                row["conclusion"] = "FDR校正后仍存在统计关联"
+            else:
+                row["conclusion"] = "FDR校正后未发现统计显著关联"
+
+    for row in results:
+        if not row.get("ok"):
+            row["effect_text"] = "—"
+            row["conclusion"] = "未完成：" + row.get("error", "未知错误")
+
+    successful = [row for row in results if row.get("ok")]
+    significant = [row for row in successful if row.get("significant")]
+    inconclusive = [row for row in successful if row.get("assumption_ok") is False]
+    not_significant = [
+        row for row in successful
+        if not row.get("significant") and row.get("assumption_ok") is not False
+    ]
+    failed = [row for row in results if not row.get("ok")]
+    if not successful:
+        return {
+            **plan, "ok": False, "results": results,
+            "error": "批量检验均未完成；" + "；".join(row["conclusion"] for row in failed),
+        }
+
+    sig_text = "、".join(row["comparison_label"] for row in significant) or "无"
+    non_sig_text = "、".join(row["comparison_label"] for row in not_significant) or "无"
+    inconclusive_text = "、".join(row["comparison_label"] for row in inconclusive)
+    failed_text = "、".join(row["comparison_label"] for row in failed)
+    conclusion = (
+        f"以{plan['anchor_variable_label']}为检验目标，FDR-BH校正后："
+        f"存在统计关联的变量为{sig_text}；未发现显著关联的变量为{non_sig_text}。"
+    )
+    if inconclusive_text:
+        conclusion += f" 检验前提不足、暂不能可靠判断的变量为{inconclusive_text}。"
+    if failed_text:
+        conclusion += f" 未完成的变量为{failed_text}。"
+    conclusion += " 以上为逐项双变量关联，不代表因果，也未控制其他混杂因素。"
+    return {
+        "ok": True, "batch": True, "method": "batch_bivariate",
+        "method_label": "批量双变量检验（FDR-BH校正）",
+        "method_reason": (
+            "根据变量类型分别选择卡方/Fisher、Mann–Whitney U、"
+            "Kruskal–Wallis、Spearman或趋势检验，并对本批p值统一控制假发现率。"
+        ),
+        "anchor_variable": plan["anchor_variable"],
+        "anchor_variable_label": plan["anchor_variable_label"],
+        "comparison_count": plan["comparison_count"],
+        "successful_count": len(successful),
+        "significant_count": len(significant),
+        "inconclusive_count": len(inconclusive),
+        "failed_count": len(failed),
+        "significant": bool(significant),
+        "p_correction": "FDR-BH",
+        "results": results,
+        "conclusion": conclusion,
+    }
+
+
+def analyze_statistical_question(provider: DataProvider, question: str) -> dict:
+    plan = plan_statistical_question(question)
+    if not plan.get("ok"):
+        return plan
+    if plan.get("batch"):
+        return _analyze_batch(provider, plan)
+    return _execute_single(provider, plan)
+
+
 def format_statistical_result(result: dict) -> str:
     if not result.get("ok"):
         return "统计分析未完成：" + result.get("error", "未知错误")
+    if result.get("batch"):
+        lines = [
+            f"检验目标：{result['anchor_variable_label']}",
+            f"方法：{result['method_label']}",
+            f"完成：{result['successful_count']}/{result['comparison_count']}；"
+            f"FDR校正后显著：{result['significant_count']}",
+        ]
+        for row in result["results"]:
+            if row.get("ok"):
+                lines.append(
+                    f"- {row['comparison_label']}：{row['method_label']}；"
+                    f"原始p={row['p']:.4g}；FDR p={row['p_adjusted']:.4g}；"
+                    f"{row.get('effect_text', '—')}；{row['conclusion']}"
+                )
+            else:
+                lines.append(f"- {row['comparison_label']}：{row['conclusion']}")
+        lines.append("结论：" + result["conclusion"])
+        return "\n".join(lines)
     lines = [
         f"变量：{result['variable_x_label']} × {result['variable_y_label']}",
         f"分析粒度：{result['grain']}",

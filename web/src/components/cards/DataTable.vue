@@ -25,7 +25,7 @@
       </el-table-column>
     </el-table>
     <!-- 长数据折叠 -->
-    <div v-if="rows.length > LIMIT" class="expand" @click="expanded = !expanded">
+    <div v-if="rows.length > effectiveLimit" class="expand" @click="expanded = !expanded">
       {{ expanded ? '收起 ⌃' : `展开全部 ${rows.length} 组数据 ⌄` }}
     </div>
   </div>
@@ -38,13 +38,15 @@ const props = defineProps<{
   rows: any[]
   valueKey?: string
   showRank?: boolean
+  limit?: number
 }>()
 
 const LIMIT = 6
+const effectiveLimit = computed(() => props.limit ?? LIMIT)
 const expanded = ref(false)
 
 const keys = computed(() => (props.rows[0] ? Object.keys(props.rows[0]) : []))
-const shown = computed(() => (expanded.value ? props.rows : props.rows.slice(0, LIMIT)))
+const shown = computed(() => (expanded.value ? props.rows : props.rows.slice(0, effectiveLimit.value)))
 
 // 解析单元格里的数字（"18.89%" → 18.89）
 function num(v: any): number | null {

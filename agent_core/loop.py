@@ -48,7 +48,29 @@ def _fmt_observation(result: dict) -> str:
     if not result.get("ok"):
         return f"[工具错误] {result.get('error', '未知错误')}"
 
-    # 关联因素分析结果：输出基准 + 优先级摘要
+    # 延迟/交接超期归因：输出目标基准、两层筛选与稳定变量。
+    if result.get("target") in {
+        "is_late_delivery", "is_any_item_handover_late"
+    }:
+        base = result.get("target_baseline", {})
+        lines = [
+            f"【{result.get('target_label', '目标')}关联因素分析】",
+            f"有效样本 {base.get('sample', 0)}，目标发生率 "
+            f"{base.get('target_rate', 0):.2%}",
+            f"第一层通过 {len(result.get('significant_features', []))} 项；"
+            f"共线性处理后入模 {len(result.get('selected_features', []))} 项；"
+            f"调整后稳定 {len(result.get('adjusted_features', []))} 项。",
+            "调整后稳定变量:",
+        ]
+        for row in result.get("adjusted_features", [])[:10]:
+            lines.append(
+                f"  {row.get('label', row.get('feature'))}: "
+                f"{row.get('method', '多变量Logistic调整')}"
+            )
+        lines.append("结论边界: 结果仅表示统计关联，不作因果判断或自动生成治理策略。")
+        return "\n".join(lines)
+
+    # 低评分关联因素分析结果：输出基准 + 优先级摘要
     if "priorities" in result:
         base = result["baseline"]
         lines = [
@@ -126,9 +148,9 @@ class ReActLoop:
             "run_attribution": self._run_attribution,
         }
 
-    def _run_attribution(self) -> dict:
-        """执行低评分关联因素分析（固定顺序流程，无需参数）。"""
-        return run_attribution(self._provider, self._semantic)
+    def _run_attribution(self, question: str | None = None) -> dict:
+        """执行三个受控目标之一的关联因素分析。"""
+        return run_attribution(self._provider, self._semantic, question=question)
 
     def _system_prompt(self) -> str:
         return (
@@ -150,8 +172,9 @@ class ReActLoop:
             "只查询回答问题所必需的最少指标与维度，不要自行追加无关指标。\n"
             "一次成功工具结果已经包含用户要求的指标和维度时，下一步必须输出 answer；"
             "不要为了改换排序、补取全部分组或重复核对而再次执行等价查询。\n"
-            "  {\"action\":\"tool\",\"tool\":\"run_attribution\",\"args\":{}}\n"
-            "当用户要求分析低评分关联因素或进行低评分归因时，调用 run_attribution（无需参数，自动完成订单级与订单-卖家级分析）。\n"
+            "  {\"action\":\"tool\",\"tool\":\"run_attribution\",\"args\":{\"question\":\"用户原问题\"}}\n"
+            "当用户要求对交接超期、最终延迟或低评分进行归因时，调用 run_attribution，"
+            "并原样传入 question；其他归因目标不支持。\n"
             "run_attribution 会完成单变量筛选、共线性处理和多变量Logistic调整；"
             "必须区分统计关联与因果关系，不得自动生成治理策略。\n"
             "  {\"action\":\"tool\",\"tool\":\"list_metrics\",\"args\":{\"table\":\"...\"}}\n"

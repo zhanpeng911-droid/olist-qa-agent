@@ -3,25 +3,43 @@
 </template>
 
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import * as echarts from 'echarts'
 
 const props = defineProps<{ option: any; height?: string }>()
 const el = ref<HTMLDivElement>()
 let chart: echarts.ECharts | null = null
+let observer: ResizeObserver | null = null
+let frame = 0
+
+/**
+ * 折叠面板关闭时容器宽度可能为 0。此时初始化 ECharts 会把横轴压成一条短线。
+ * 等容器真正可见后再初始化，并持续监听尺寸变化。
+ */
+function scheduleRender() {
+  if (frame) cancelAnimationFrame(frame)
+  frame = requestAnimationFrame(() => {
+    const target = el.value
+    if (!target || target.clientWidth < 10 || target.clientHeight < 10) return
+    if (!chart) chart = echarts.init(target)
+    chart.setOption(props.option, true)
+    chart.resize()
+  })
+}
 
 onMounted(() => {
-  if (!el.value) return
-  chart = echarts.init(el.value)
-  chart.setOption(props.option)
-  window.addEventListener('resize', onResize)
+  observer = new ResizeObserver(scheduleRender)
+  if (el.value) observer.observe(el.value)
+  window.addEventListener('resize', scheduleRender)
+  nextTick(scheduleRender)
 })
 
-watch(() => props.option, (o) => chart?.setOption(o, true), { deep: true })
-
-function onResize() { chart?.resize() }
+watch(() => props.option, scheduleRender, { deep: true })
 onBeforeUnmount(() => {
-  window.removeEventListener('resize', onResize)
+  window.removeEventListener('resize', scheduleRender)
+  observer?.disconnect()
+  observer = null
+  if (frame) cancelAnimationFrame(frame)
   chart?.dispose()
   chart = null
 })

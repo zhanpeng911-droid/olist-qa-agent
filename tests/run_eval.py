@@ -287,13 +287,26 @@ class Eval:
         )
         return ok, f"检验详情={len(rows)}"
 
-    def _c_attribution_only_low_score(self, _p):
-        rejected = run_attribution(
+    def _c_attribution_three_targets(self, _p):
+        delay = run_attribution(
             self.provider, self.semantic, question="请对延迟进行归因"
         )
-        ok = (not rejected.get("ok") and rejected.get("unsupported_target")
-              and "只支持" in rejected.get("error", ""))
-        return bool(ok), rejected.get("error", "")
+        handover = run_attribution(
+            self.provider, self.semantic, question="请对交接超期进行归因"
+        )
+        rejected = run_attribution(
+            self.provider, self.semantic, question="请对复购进行归因"
+        )
+        ok = (
+            delay.get("ok") and delay.get("target") == "is_late_delivery"
+            and handover.get("ok")
+            and handover.get("target") == "is_any_item_handover_late"
+            and not rejected.get("ok") and rejected.get("unsupported_target")
+        )
+        return bool(ok), (
+            f"delay={delay.get('target')} handover={handover.get('target')} "
+            f"unsupported={rejected.get('unsupported_target')}"
+        )
 
     def _c_collinear_representative(self, _p):
         rows = self.attr.get("selected_features", [])

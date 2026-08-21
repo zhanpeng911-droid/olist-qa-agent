@@ -14,6 +14,7 @@ import numpy as np
 import pandas as pd
 from scipy import stats
 
+from .binning import numeric_rate_bins
 from .data_provider import DataProvider
 from .deep_validation import _route_validation
 from .model_cache import cached_frame
@@ -316,19 +317,22 @@ def _numeric_details(df: pd.DataFrame, field: str) -> dict:
             "p75": float(values.quantile(0.75)),
             "mean": float(values.mean()),
         })
-    bins = []
-    try:
-        bucket = pd.qcut(df[field], q=5, duplicates="drop")
-        grouped = df.groupby(bucket, observed=True)["is_low_score"].agg(["size", "sum", "mean"])
-        for value, row in grouped.iterrows():
-            bins.append({
-                "value_range": str(value), "sample": int(row["size"]),
-                "low_score_count": int(row["sum"]),
-                "low_score_rate": float(row["mean"]),
-            })
-    except (ValueError, TypeError):
-        bins = []
-    return {"by_target": summary, "quantile_bins": bins}
+    binned = numeric_rate_bins(df, field, "is_low_score")
+    bins = [
+        {
+            "value_range": row["value_range"],
+            "sample": row["sample"],
+            "low_score_count": row["target_count"],
+            "low_score_rate": row["target_rate"],
+        }
+        for row in binned["rows"]
+    ]
+    return {
+        "by_target": summary,
+        "quantile_bins": bins,
+        "binning_method": binned["method"],
+        "binning_note": binned["note"],
+    }
 
 
 def _screen_numeric(provider: DataProvider, spec: FeatureSpec,

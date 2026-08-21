@@ -3,12 +3,13 @@ __pycache__/
 *.py[cod]
 .venv/
 .pytest_cache/
+*.egg-info/
 
 # 环境与密钥
 .env
 
-# Mart 截取样本（本地数据，不提交）
-data/sample/mart_order_*.csv
+# 完整 Mart 不入库；data/sample 下的三份截取测试 CSV 需要随项目提交，
+# 以保证离线演示和自动测试可复现。
 sample_data/
 
 # 系统

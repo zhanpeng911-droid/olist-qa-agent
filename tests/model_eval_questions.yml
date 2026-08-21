@@ -40,4 +40,6 @@ model_eval_questions:
   - {id: M-38, category: 线路复合指标, question: 按线路同时比较延迟率和低评分率。, expected_intent: query, table: mart_order_seller_delivery, metrics: [late_rate, low_score_rate], dimensions: [route]}
   - {id: M-39, category: 双维度问数, question: 按品类和支付方式交叉查看低评分率。, expected_intent: query, table: mart_order_delivery, metrics: [low_score_rate], dimensions: [primary_category_name, primary_payment_type]}
   - {id: M-40, category: 口语排名, question: 哪些收货地区又容易晚到又容易给低分？按客户州列出来。, expected_intent: query, table: mart_order_delivery, metrics: [late_rate, low_score_rate], dimensions: [customer_state]}
-  - {id: M-41, category: 归因目标边界, question: 请对延迟进行归因分析。, expected_intent: attribution, expect_supported: false}
+  - {id: M-41, category: 延迟归因, question: 请对延迟进行归因分析。, expected_intent: attribution, expect_supported: true, expect_adjusted: true}
+  - {id: M-42, category: 交接归因, question: 哪些因素与交接超期有关？, expected_intent: attribution, expect_supported: true}
+  - {id: M-43, category: 归因目标边界, question: 请对复购进行归因分析。, expected_intent: attribution, expect_supported: false}

@@ -10,6 +10,7 @@ import json
 import math
 import os
 import time
+from decimal import Decimal
 from pathlib import Path
 from typing import AsyncGenerator
 
@@ -27,13 +28,16 @@ load_dotenv(ROOT / ".env")
 from agent_core.attribution import (  # noqa: E402
     ORDER_COUNT_METRIC,
     ORDER_TABLE,
+    SELLER_COUNT_METRIC,
+    SELLER_TABLE,
     build_baseline,
+    resolve_attribution_target,
     run_attribution,
     screen_factors,
 )
 from agent_core.data_provider import MySQLProvider, ProjectCsvProvider  # noqa: E402
 from agent_core.deep_validation import analyze_deep_validation  # noqa: E402
-from agent_core.intent import Intent  # noqa: E402
+from agent_core.intent import Intent, is_write_request  # noqa: E402
 from agent_core.llm import MockLLM, create_llm  # noqa: E402
 from agent_core.loop import ReActLoop  # noqa: E402
 from agent_core.query_analysis import analyze_query_question, plan_query_question  # noqa: E402
@@ -57,7 +61,8 @@ _ATTR_CACHE_TTL = 86400         # 24 小时（全量数据静态，缓存长期�
 
 
 def _cached_attribution(question: str) -> dict:
-    key = question or "default"
+    # 同一目标的不同自然语言问法复用一次昂贵的全量模型结果。
+    key = resolve_attribution_target(question or None) or f"unsupported::{question}"
     now = time.time()
     hit = _ATTR_CACHE.get(key)
     if hit and now - hit[0] < _ATTR_CACHE_TTL:
@@ -94,6 +99,8 @@ def _clean(obj):
     """
     if hasattr(obj, "item"):          # numpy 标量 → Python 标量
         obj = obj.item()
+    if isinstance(obj, Decimal):
+        return float(obj)
     if isinstance(obj, float):
         return obj if math.isfinite(obj) else None   # inf/nan → null
     if isinstance(obj, dict):
@@ -201,15 +208,37 @@ def api_dashboard():
             semantic.guards.get("min_group_sample", 100), sql_sink=sqls,
         )
 
-        late = tools.query_mart(ORDER_TABLE, metrics=["late_rate"], limit=1)
+        late = tools.query_mart(
+            ORDER_TABLE, metrics=["late_rate", ORDER_COUNT_METRIC], limit=1
+        )
         sqls.append(late["sql"])
-        avg = tools.query_mart(ORDER_TABLE, metrics=["avg_review_score"], limit=1)
+        avg = tools.query_mart(
+            ORDER_TABLE, metrics=["avg_review_score", "reviewed_orders"], limit=1
+        )
         sqls.append(avg["sql"])
+        handover = tools.query_mart(
+            SELLER_TABLE,
+            metrics=["handover_late_rate", SELLER_COUNT_METRIC],
+            limit=1,
+        )
+        sqls.append(handover["sql"])
         trend = tools.query_mart(
-            ORDER_TABLE, metrics=["low_score_rate", "order_count"],
+            ORDER_TABLE,
+            metrics=["low_score_rate", "avg_review_score", ORDER_COUNT_METRIC],
             dimensions=["order_month"], limit=100,
         )
         sqls.append(trend["sql"])
+        late_trend = tools.query_mart(
+            ORDER_TABLE, metrics=["late_rate", ORDER_COUNT_METRIC],
+            dimensions=["order_month"], limit=100,
+        )
+        sqls.append(late_trend["sql"])
+        handover_trend = tools.query_mart(
+            SELLER_TABLE,
+            metrics=["handover_late_rate", SELLER_COUNT_METRIC],
+            dimensions=["order_month"], limit=100,
+        )
+        sqls.append(handover_trend["sql"])
     finally:
         provider.close()
 
@@ -217,14 +246,35 @@ def api_dashboard():
     avg_score = (
         avg["rows"][0]["_m_avg_review_score"] if avg.get("ok") and avg["rows"] else None
     )
+    handover_rate = (
+        handover["rows"][0]["_m_handover_late_rate"]
+        if handover.get("ok") and handover["rows"] else None
+    )
     return _json({
         "ok": True,
         "source_label": "MySQL" if os.environ.get("USE_MYSQL") == "1" else "演示样本(CSV)",
         "baseline": {"order": order_base},
         "factors": {"order": order_groups},
         "late_rate": late_rate,
+        "late_sample": (
+            late["rows"][0][f"_m_{ORDER_COUNT_METRIC}"]
+            if late.get("ok") and late["rows"] else None
+        ),
+        "handover_late_rate": handover_rate,
+        "handover_sample": (
+            handover["rows"][0][f"_m_{SELLER_COUNT_METRIC}"]
+            if handover.get("ok") and handover["rows"] else None
+        ),
         "avg_review_score": avg_score,
+        "avg_score_sample": (
+            avg["rows"][0]["_m_reviewed_orders"]
+            if avg.get("ok") and avg["rows"] else None
+        ),
         "trend": trend["rows"] if trend.get("ok") else [],
+        "late_trend": late_trend["rows"] if late_trend.get("ok") else [],
+        "handover_trend": (
+            handover_trend["rows"] if handover_trend.get("ok") else []
+        ),
         "sqls": sqls,
     })
 
@@ -343,7 +393,16 @@ async def api_chat(body: QuestionBody):
         yield _sse("intent", {"intent": intent})
         provider = get_provider()
         try:
-            if intent == "query":
+            if is_write_request(body.question):
+                yield _sse("answer", {
+                    "answer": (
+                        "当前 Agent 仅支持只读数据分析，不会执行删除数据库、删除/创建表、"
+                        "修改表结构或写入数据。可以继续询问数据质量、表结构、指标或统计分析问题。"
+                    ),
+                    "ok": False,
+                    "boundary": "read_only",
+                })
+            elif intent == "query":
                 # 确定性解析未识别（无指标）或不完整（有指标但丢维度）→ 回退 LLM
                 plan = plan_query_question(body.question, semantic)
                 if not plan.get("ok") or plan.get("incomplete"):
@@ -361,37 +420,36 @@ async def api_chat(body: QuestionBody):
                 yield _sse("running", {"stage": "进行统计检验…"})
                 res = analyze_statistical_question(provider, body.question)
                 if res.get("ok") is False or res.get("error"):
-                    yield _sse("running", {"stage": "确定性检验未覆盖，改用智能推理…"})
-                    res2 = _react_answer(body.question, provider, semantic)
-                    for t in res2.get("trace", []):
-                        yield _sse("step", t)
-                    yield _sse("answer", {"answer": res2.get("answer", ""),
-                                          "ok": res2.get("ok", False)})
+                    # 统计检验严格受变量注册表和分析粒度约束；边界失败必须明确拒绝，
+                    # 不能让 LLM 自由拼接表或编造不存在的变量。
+                    yield _sse("answer", {
+                        "answer": res.get("error", "当前问题不在受控统计分析范围内。"),
+                        "ok": False,
+                        "boundary": "controlled_statistics",
+                    })
                 else:
                     yield _sse("result", res)
             elif intent == "attribution":
-                yield _sse("running", {"stage": "进行低评分关联因素分析…"})
+                yield _sse("running", {"stage": "进行关联因素筛选与调整后验证…"})
                 res = _cached_attribution(body.question)
                 if res.get("unsupported_target"):
-                    # 目标非低评分（如“退款原因归因”）→ 改用 LLM 解释边界
-                    yield _sse("running", {"stage": "该目标暂不支持自动化归因，改用智能推理…"})
-                    res2 = _react_answer(body.question, provider, semantic)
-                    for t in res2.get("trace", []):
-                        yield _sse("step", t)
-                    yield _sse("answer", {"answer": res2.get("answer", ""),
-                                          "ok": res2.get("ok", False)})
+                    # 归因目标白名单是业务时序约束，不允许 LLM 临时替换结果变量。
+                    yield _sse("answer", {
+                        "answer": res.get("error", "当前归因目标不受支持。"),
+                        "ok": False,
+                        "boundary": "attribution_target_whitelist",
+                    })
                 else:
                     yield _sse("result", res)
             elif intent == "deep_validation":
                 yield _sse("running", {"stage": "进行深度验证…"})
                 res = analyze_deep_validation(provider, body.question)
                 if res.get("ok") is False or res.get("error"):
-                    yield _sse("running", {"stage": "深度验证未覆盖，改用智能推理…"})
-                    res2 = _react_answer(body.question, provider, semantic)
-                    for t in res2.get("trace", []):
-                        yield _sse("step", t)
-                    yield _sse("answer", {"answer": res2.get("answer", ""),
-                                          "ok": res2.get("ok", False)})
+                    yield _sse("answer", {
+                        "answer": res.get("error", "当前问题不在受控深度验证范围内。"),
+                        "ok": False,
+                        "boundary": "controlled_deep_validation",
+                    })
                 else:
                     yield _sse("result", res)
             else:

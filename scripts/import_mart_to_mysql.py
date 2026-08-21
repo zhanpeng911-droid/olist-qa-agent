@@ -3,11 +3,13 @@
 - 默认：data/sample 的 3 张演示表
 - 全量：`--dir <导出目录>` 导入完整 mart 表（大文件，分批读 + 分批插入）
 - 列类型推断：采样前 N 行（数值列 DOUBLE / 日期列 VARCHAR / 其余 VARCHAR）
-- 幂等：先 DROP 同名表再建
+- 破坏性操作：仅显式传入 --replace 时才会 DROP 同名表再建
 
 用法:
-  uv run python scripts/import_mart_to_mysql.py                          # 演示样本
-  uv run python scripts/import_mart_to_mysql.py --dir <全量CSV目录>      # 全量
+  uv run python scripts/import_mart_to_mysql.py --replace                     # 演示样本
+  uv run python scripts/import_mart_to_mysql.py --dir <全量CSV目录> --replace  # 全量
+
+已有治理完成的 Mart 表时不要运行本脚本，直接配置 .env 即可。
 """
 from __future__ import annotations
 
@@ -146,7 +148,19 @@ def import_csv(conn, csv_path: Path, table: str) -> int:
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--dir", help="全量 CSV 目录（不传则用 data/sample 演示样本）")
+    ap.add_argument(
+        "--replace",
+        action="store_true",
+        help="确认允许删除并重建目标 Mart 表",
+    )
     args = ap.parse_args()
+
+    if not args.replace:
+        print(
+            "拒绝执行：导入会删除并重建同名 Mart 表。"
+            "若确实需要从 CSV 重建，请显式添加 --replace。"
+        )
+        return 2
 
     host = os.environ.get("DB_HOST", "127.0.0.1")
     port = int(os.environ.get("DB_PORT", "3306"))

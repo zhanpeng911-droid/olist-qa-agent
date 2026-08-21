@@ -48,7 +48,12 @@ DEFAULT_FEATURES = [
 
 def is_deep_validation_question(question: str) -> bool:
     q = question.lower()
-    return any(hint.lower() in q for hint in DEEP_HINTS)
+    if any(hint.lower() in q for hint in DEEP_HINTS):
+        return True
+    # “用较晚时期订单验证高风险线路”虽未出现“深度”二字，本质仍是留出/跨时间验证。
+    return "验证" in q and any(hint in q for hint in (
+        "较晚时期", "较晚订单", "高风险线路", "线路稳定", "跨时间", "时间切分",
+    ))
 
 
 def extract_deep_features(question: str) -> list[str]:

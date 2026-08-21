@@ -25,9 +25,12 @@
             <div v-if="m.intent" class="intent-tag">{{ intentLabel(m.intent) }}</div>
             <div v-if="m.running" class="running">{{ m.running }}</div>
             <MarkdownText v-if="m.text" :text="m.text" />
-            <div v-if="m.summary && !m.result" class="hist-summary">{{ m.summary }}</div>
+            <div v-if="m.superseded" class="hist-summary outdated-result">
+              该归因结果已被本对话中后续的同目标分析替代，请查看下方最新结果。
+            </div>
+            <div v-else-if="m.summary && !m.result" class="hist-summary">{{ m.summary }}</div>
             <ResultCard
-              v-if="m.result && m.intent"
+              v-if="m.result && m.intent && !m.superseded"
               :intent="m.intent"
               :d="m.result"
               :suggestions="m.suggestions"
@@ -87,6 +90,7 @@ import { appendMessages, chatStream } from '../api'
 import MarkdownText from '../components/cards/MarkdownText.vue'
 import ResultCard from '../components/cards/ResultCard.vue'
 import { useSessions } from '../composables/useSessions'
+import { fmtNum, fmtPct } from '../format'
 
 const route = useRoute()
 const { sessions, currentId, switchSession, getMessages, setMessages, setTitle, loadSessions } = useSessions()
@@ -103,9 +107,6 @@ function setMsgRef(el: any, i: number) {
 }
 
 // ---------- 会话消息序列化（小结果完整存，大结果降级存摘要） ----------
-function fmtPct(v: number | undefined | null) {
-  return v == null ? '—' : (v * 100).toFixed(1) + '%'
-}
 function summarizeResult(intent: string, d: any): string {
   if (intent === 'query') {
     const r = d?.display_rows?.[0]
@@ -115,7 +116,7 @@ function summarizeResult(intent: string, d: any): string {
   if (intent === 'attribution') {
     const base = d?.baseline?.order?.low_score_rate
     const ev = d?.verification?.evidence
-    return `低评分率 ${fmtPct(base)} · 延迟 OR ${ev?.or?.toFixed?.(2) ?? '—'}（${ev?.grade ?? '—'}）`
+    return `低评分率 ${fmtPct(base)} · 延迟 OR ${fmtNum(ev?.or)}（${ev?.grade ?? '—'}）`
   }
   if (intent === 'statistical') return d?.conclusion || ''
   return d?.answer || ''
@@ -133,9 +134,27 @@ function serializeMessages(msgs: any[]) {
   })
 }
 function hydrateMessages(list: any[]): any[] {
-  return list.map((m) => m.role === 'user'
-    ? { role: 'user', text: m.text }
-    : { role: 'assistant', intent: m.intent, error: m.error, text: m.text, summary: m.summary, steps: [], result: m.result ?? null, clarify: [], suggestions: m.result ? suggestionsFor(m.intent) : [] })
+  // 同一对话可能在代码更新前后重复运行同一归因目标。保留原始消息，
+  // 但旧结果不再渲染完整图表，避免用户把历史分箱误认为当前结果。
+  const latestAttributionByTarget = new Map<string, number>()
+  list.forEach((m, index) => {
+    const target = m?.role === 'assistant' && m?.intent === 'attribution'
+      ? m?.result?.target
+      : null
+    if (target) latestAttributionByTarget.set(String(target), index)
+  })
+  return list.map((m, index) => {
+    if (m.role === 'user') return { role: 'user', text: m.text }
+    const target = m?.intent === 'attribution' ? m?.result?.target : null
+    const superseded = Boolean(
+      target && latestAttributionByTarget.get(String(target)) !== index,
+    )
+    return {
+      role: 'assistant', intent: m.intent, error: m.error, text: m.text,
+      summary: m.summary, steps: [], result: m.result ?? null, clarify: [],
+      suggestions: m.result ? suggestionsFor(m.intent) : [], superseded,
+    }
+  })
 }
 async function loadCurrent() {
   messages.value = hydrateMessages(await getMessages())

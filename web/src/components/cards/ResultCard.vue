@@ -5,10 +5,10 @@
     <!-- ============ 归因结果 ============ -->
     <template v-if="intent === 'attribution'">
       <div class="rc-row">
-        <div class="rc-metric"><span>订单级低评分率</span><b>{{ fmtPct(d.baseline?.order?.low_score_rate) }}</b></div>
-        <div class="rc-metric"><span>卖家级低评分率</span><b>{{ fmtPct(d.baseline?.seller?.low_score_rate) }}</b></div>
-        <div class="rc-metric"><span>延迟 OR</span><b>{{ fmtNum(d.verification?.evidence?.or) }}</b></div>
-        <div class="rc-metric"><span>证据分级</span><b>{{ d.verification?.evidence?.grade ?? '—' }}</b></div>
+        <div class="rc-metric"><span>{{ attributionTargetLabel }}发生率</span><b>{{ fmtPct(attributionRate) }}</b></div>
+        <div class="rc-metric"><span>第一层筛选通过</span><b>{{ d.significant_features?.length ?? 0 }}</b></div>
+        <div class="rc-metric"><span>进入调整模型</span><b>{{ d.selected_features?.length ?? 0 }}</b></div>
+        <div class="rc-metric"><span>调整后仍显著</span><b>{{ d.adjusted_features?.length ?? 0 }}</b></div>
       </div>
 
       <div v-if="summary" class="callout">
@@ -16,52 +16,45 @@
         <span class="callout-text">{{ summary }}</span>
       </div>
 
-      <template v-if="priorityRows.length">
-        <h4 class="rc-title">优先级问题对象</h4>
-        <DataTable :rows="priorityRows" value-key="低评分率" show-rank />
-      </template>
-
-      <template v-if="terms.length">
-        <h4 class="rc-title">调整后 Logistic OR（森林图）</h4>
-        <BaseChart :option="forest" height="220px" />
-      </template>
-
-      <template v-if="recs.length">
-        <h4 class="rc-title">改善建议（基于已验证证据）</h4>
-        <div v-for="r in recs" :key="r.factor" class="rec">
-          <div class="rec-head">
-            <span class="pill" :class="r.priority === 'P0' ? 'down' : 'flat'">{{ r.priority }}</span>
-            <b>{{ r.factor }}</b>
-            <span class="rec-resp">{{ r.responsibility }}</span>
-          </div>
-          <div class="rec-body">
-            <div><b>动作：</b>{{ (r.actions || []).join('；') }}</div>
-            <div><b>监控：</b>{{ (r.monitor_metrics || []).join('、') }}</div>
-            <div><b>验证：</b>{{ r.verify }}</div>
-          </div>
-        </div>
-      </template>
+      <AttributionDetails :d="d" />
 
       <div v-if="d.caveats?.length" class="rc-caveat">{{ d.caveats.join('；') }}</div>
     </template>
 
     <!-- ============ 统计结果 ============ -->
     <template v-else-if="intent === 'statistical'">
-      <div class="rc-row">
-        <div class="rc-metric"><span>方法</span><b>{{ d.method_label ?? '—' }}</b></div>
-        <div class="rc-metric"><span>p 值</span><b>{{ fmtP(d.p_adjusted ?? d.p) }}</b></div>
-        <div class="rc-metric"><span>效应量</span><b>{{ fmtNum(d.effect_size ?? d.or) }}</b></div>
-        <div class="rc-metric"><span>显著</span><b>{{ d.significant ? '是' : '否' }}</b></div>
-      </div>
-      <div v-if="d.conclusion" class="callout">
-        <span class="callout-label"><Lightbulb :size="13" /> 核心结论</span>
-        <span class="callout-text">{{ d.conclusion }}</span>
-      </div>
-      <p v-if="d.method_reason" class="rc-caveat">{{ d.method_reason }}</p>
-      <div v-if="topGroups.length">
-        <h4 class="rc-title">分组详情</h4>
-        <DataTable :rows="topGroups" :value-key="topValueKey" show-rank />
-      </div>
+      <template v-if="d.batch">
+        <div class="rc-row">
+          <div class="rc-metric"><span>检验目标</span><b>{{ d.anchor_variable_label ?? '—' }}</b></div>
+          <div class="rc-metric"><span>已完成</span><b>{{ d.successful_count ?? 0 }}/{{ d.comparison_count ?? 0 }}</b></div>
+          <div class="rc-metric"><span>FDR校正后显著</span><b>{{ d.significant_count ?? 0 }}</b></div>
+          <div class="rc-metric"><span>检验前提不足</span><b>{{ d.inconclusive_count ?? 0 }}</b></div>
+        </div>
+        <div v-if="d.conclusion" class="callout">
+          <span class="callout-label"><Lightbulb :size="13" /> 批量检验结论</span>
+          <span class="callout-text">{{ d.conclusion }}</span>
+        </div>
+        <h4 class="rc-title">逐项检验结果</h4>
+        <DataTable :rows="batchRows" :limit="20" />
+        <p v-if="d.method_reason" class="rc-caveat">{{ d.method_reason }}</p>
+      </template>
+      <template v-else>
+        <div class="rc-row">
+          <div class="rc-metric"><span>方法</span><b>{{ d.method_label ?? '—' }}</b></div>
+          <div class="rc-metric"><span>p 值</span><b>{{ fmtP(d.p_adjusted ?? d.p) }}</b></div>
+          <div class="rc-metric"><span>效应量</span><b>{{ fmtNum(d.effect_size ?? d.or) }}</b></div>
+          <div class="rc-metric"><span>显著</span><b>{{ d.significant ? '是' : '否' }}</b></div>
+        </div>
+        <div v-if="d.conclusion" class="callout">
+          <span class="callout-label"><Lightbulb :size="13" /> 核心结论</span>
+          <span class="callout-text">{{ d.conclusion }}</span>
+        </div>
+        <p v-if="d.method_reason" class="rc-caveat">{{ d.method_reason }}</p>
+        <div v-if="topGroups.length">
+          <h4 class="rc-title">分组详情</h4>
+          <DataTable :rows="topGroups" :value-key="topValueKey" show-rank />
+        </div>
+      </template>
     </template>
 
     <!-- ============ 查询结果 ============ -->
@@ -158,10 +151,11 @@
 import { computed, onErrorCaptured, ref } from 'vue'
 import { ArrowRight, BarChart3, Lightbulb, Map, Table2, TrendingUp } from 'lucide-vue-next'
 import BaseChart from '../charts/BaseChart.vue'
+import AttributionDetails from './AttributionDetails.vue'
 import DataTable from './DataTable.vue'
 import GenericResult from './GenericResult.vue'
-import { barOption, forestOption } from '../../charts'
-import { fmtNum, fmtP } from '../../format'
+import { barOption } from '../../charts'
+import { fmtNum, fmtP, fmtPct } from '../../format'
 
 const props = defineProps<{ intent: string; d: any; suggestions?: { label: string; prompt: string; icon?: string }[] }>()
 const emit = defineEmits<{ (e: 'followup', prompt: string): void }>()
@@ -172,38 +166,22 @@ onErrorCaptured((err) => {
   return false
 })
 
-function fmtPct(v: number | undefined) {
-  return v == null ? '—' : (v * 100).toFixed(1) + '%'
-}
-
-// ---------- attribution ----------
-const terms = computed(() => {
-  const lo = props.d?.verification?.logistic?.order?.terms ?? []
-  return lo.filter((t: any) => !t.term.startsWith('C(') || t.term.includes('is_late_delivery'))
-})
-const forest = computed(() =>
-  forestOption(terms.value.slice(0, 8).map((t: any) => ({ ...t, term: shortTerm(t.term) }))),
-)
-const recs = computed(() => props.d?.recommendations?.recommendations ?? [])
-const priorityRows = computed(() => {
-  // priorities → 业务中文行
-  const dimLabel: Record<string, string> = {
-    is_late_delivery: '是否延迟', delay_bucket: '延迟分档', customer_state: '客户州',
-    primary_category_name: '品类', primary_payment_type: '支付方式', order_month: '月份',
-    seller_state: '卖家州', route: '线路', cross_state: '是否跨州', is_multi_seller_order: '多卖家',
-  }
-  return (props.d?.priorities ?? []).map((g: any) => ({
-    '维度': dimLabel[g.dimension] ?? g.dimension,
-    '对象': g.value === 1 ? '是' : g.value === 0 ? '否' : g.value,
-    '样本': g.sample,
-    '低评分率': fmtPct(g.low_score_rate),
-    'Lift': g.lift?.toFixed(2),
-    '超额': g.excess_low_score,
-  }))
-})
+const attributionTargetLabel = computed(() => props.d?.target_short_label ?? '低评分')
+const attributionRate = computed(() => props.d?.target_rate
+  ?? props.d?.target_baseline?.target_rate
+  ?? props.d?.baseline?.order?.low_score_rate)
 
 // ---------- statistical ----------
 const topGroups = computed(() => props.d?.top_groups ?? [])
+const batchRows = computed(() => (props.d?.results ?? []).map((row: any) => ({
+  '变量': row.comparison_label ?? row.variable_y_label ?? '—',
+  '检验方法': row.method_label ?? '未完成',
+  '原始p值': row.ok ? fmtP(row.p) : '—',
+  'FDR p值': row.ok ? fmtP(row.p_adjusted) : '—',
+  '效应量': row.effect_text ?? '—',
+  '样本量': row.sample ?? '—',
+  '结论': row.conclusion ?? row.error ?? '—',
+})))
 const topValueKey = computed(() => {
   const r = topGroups.value[0]
   if (!r) return ''
@@ -264,10 +242,15 @@ const sortedRows = computed(() => {
 const summary = computed(() => {
   if (props.intent === 'attribution') {
     const ev = props.d?.verification?.evidence
-    if (ev && ev.or) {
+    if (props.d?.target === 'is_low_score' && ev && ev.or) {
       return `延迟订单的低评分风险为按时订单的 ${fmtNum(ev.or)} 倍（证据分级：${ev.grade ?? '—'}），是当前数据中最稳定的低评分驱动因素。`
     }
-    return ''
+    const labels = (props.d?.adjusted_features ?? [])
+      .filter((row: any) => row?.stable)
+      .map((row: any) => row.label ?? row.feature)
+    return labels.length
+      ? `控制预设变量后，${labels.join('、')}仍与${attributionTargetLabel.value}显著相关；该结果说明调整后的统计关联，不代表因果。`
+      : `当前没有候选变量同时通过${attributionTargetLabel.value}归因的两层统计门槛。`
   }
   if (!hasTable.value || !groupValueKey.value) return ''
   const rows = props.d.display_rows
@@ -368,11 +351,6 @@ const MODE_LABEL: Record<string, string> = {
 }
 function tableLabel(t?: string) { return TABLE_LABEL[t ?? ''] ?? '—' }
 function modeLabel(m?: string) { return MODE_LABEL[m ?? ''] ?? m ?? '—' }
-function shortTerm(t: string) {
-  if (t.includes('is_late_delivery')) return 'is_late_delivery'
-  if (t.startsWith('C(')) return t.replace(/^C\((.*?)\)\[T\.(.*?)\]$/, '$1=$2').slice(0, 26)
-  return t.slice(0, 26)
-}
 </script>
 
 <style scoped>
@@ -400,10 +378,6 @@ function shortTerm(t: string) {
 .rc-detail { margin-top: 12px; border: 1px solid var(--border-soft); border-radius: var(--radius-md); overflow: hidden; }
 .detail-line { font-size: 12px; color: var(--text-2); margin-bottom: 6px; }
 .rc-sql { font-size: 12px; color: var(--text-3); background: var(--bg); border-radius: var(--radius-sm); padding: 10px 12px; word-break: break-all; font-family: 'SF Mono', Consolas, monospace; }
-.rec { border: 1px solid var(--border-soft); border-radius: var(--radius-md); padding: 12px 14px; margin-bottom: 10px; }
-.rec-head { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
-.rec-resp { color: var(--primary); font-size: 12px; margin-left: auto; }
-.rec-body { font-size: 13px; color: var(--text-2); line-height: 1.8; }
 .followups { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
 .fu-label { font-size: 11px; color: var(--text-3); }
 .fu-chip { display: inline-flex; align-items: center; gap: 5px; border: 1px solid var(--border-soft); background: #F8FAFF; color: var(--primary); font-size: 12px; padding: 6px 12px; border-radius: var(--radius-pill); cursor: pointer; transition: all .18s ease; }

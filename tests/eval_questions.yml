@@ -103,7 +103,7 @@ eval_questions:
   - {id: R-02, category: 自动调整, question: 第一层候选按共线性规则选代表进入模型, check: validation_candidates}
   - {id: R-03, category: 结果表意, question: 明确总结第一层显著特征, check: significant_summary}
   - {id: R-04, category: 结果表意, question: 每项成功检验包含方法、p值、FDR校正p值和95%CI, check: feature_test_details}
-  - {id: R-05, category: 目标边界, question: 归因只支持低评分目标, check: attribution_only_low_score}
+  - {id: R-05, category: 目标边界, question: 归因支持三个有时间顺序的目标并拒绝其他目标, check: attribution_three_targets}
   - {id: R-06, category: 共线性, question: 每个共线性组只保留预设直观代表, check: collinear_representative}
   - {id: R-07, category: 调整门槛, question: 调整后稳定同时要求FDR显著和95%CI有效, check: adjusted_threshold}
   - {id: R-08, category: 解释输出, question: 只为调整后稳定变量生成分布下钻, check: stable_explanations}
