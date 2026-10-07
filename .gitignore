@@ -1,29 +1,10 @@
-# Python
-__pycache__/
-*.py[cod]
-.venv/
-.pytest_cache/
-*.egg-info/
-
-# 环境与密钥
 .env
-
-# 完整 Mart 不入库；data/sample 下的三份截取测试 CSV 需要随项目提交，
-# 以保证离线演示和自动测试可复现。
-sample_data/
-
-# 系统
-.DS_Store
-Thumbs.db
-streamlit*.log
-logs/*.log
-artifacts/runtime_logs/*.log
-artifacts/evaluations/*.json
-artifacts/model_cache/
-
-# WorkBuddy 本地工作数据（记忆日志等，不提交）
-.workbuddy/
-
-# 前端构建产物
-web/node_modules/
+.env.*
+!.env.example
+.venv/
+__pycache__/
+.pytest_cache/
+node_modules/
 web/dist/
+artifacts/
+*.log

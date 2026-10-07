@@ -1,485 +1,376 @@
-"""正式 UI 后端：FastAPI 包装 agent_core，提供 REST + SSE 流式 API。
-
-- 数据源固定后端配置：默认 ProjectCsvProvider（data/sample）；设 USE_MYSQL=1 用 MySQLProvider（读 .env DB_*）
-- SSE /api/chat：分事件推送 intent → running → result/step → answer → done
-- 生产模式：web/dist 存在时托管静态前端（单端口）
-"""
 from __future__ import annotations
 
+import csv
+import io
 import json
-import math
 import os
-import time
+from contextlib import asynccontextmanager
+from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path
-from typing import AsyncGenerator
 
-from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
-from starlette.exceptions import HTTPException as StarletteHTTPException
+import pymysql
 
-ROOT = Path(__file__).resolve().parent.parent
-load_dotenv(ROOT / ".env")
+from engineering.config import ARTIFACTS, DATABASE, DATASET, ROOT, connect, ident
+from engineering.contracts import CONTRACTS, MARTS
+from engineering.jobs import Jobs
+from engineering.pipeline import rollback
+from engineering.reports import metadata, overview, growth
+from engineering.store import Store
+from engineering.policy import validate_policy
+from engineering.retention import plan, prune
+from engineering import repair
+from agent_core.runtime import Agent
+from agent_core.model import settings as model_settings
 
-from agent_core.attribution import (  # noqa: E402
-    ORDER_COUNT_METRIC,
-    ORDER_TABLE,
-    SELLER_COUNT_METRIC,
-    SELLER_TABLE,
-    build_baseline,
-    resolve_attribution_target,
-    run_attribution,
-    screen_factors,
-)
-from agent_core.data_provider import MySQLProvider, ProjectCsvProvider  # noqa: E402
-from agent_core.deep_validation import analyze_deep_validation  # noqa: E402
-from agent_core.intent import Intent, is_write_request  # noqa: E402
-from agent_core.llm import MockLLM, create_llm  # noqa: E402
-from agent_core.loop import ReActLoop  # noqa: E402
-from agent_core.query_analysis import analyze_query_question, plan_query_question  # noqa: E402
-from agent_core.semantic import SemanticLayer  # noqa: E402
-from agent_core.statistical_analysis import analyze_statistical_question  # noqa: E402
-from agent_core.tools import Tools  # noqa: E402
-from server.session_store import SessionStore  # noqa: E402
-
-app = FastAPI(title="Olist 智能问数 Agent API", version="2.0")
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+store = Store(ARTIFACTS)
+jobs = Jobs(store)
+agent = Agent(ARTIFACTS.parent / 'agent', store, jobs, DATABASE)
 
 
-# ---------- 归因结果缓存（全量统计耗时长，缓存避免重复计算） ----------
-_ATTR_CACHE: dict[str, tuple[float, dict]] = {}
-_ATTR_CACHE_TTL = 86400         # 24 小时（全量数据静态，缓存长期有效；数据更新重启服务即刷新）
+@asynccontextmanager
+async def lifespan(app):
+    jobs.recover()
+    agent.recover()
+    yield
 
 
-def _cached_attribution(question: str) -> dict:
-    # 同一目标的不同自然语言问法复用一次昂贵的全量模型结果。
-    key = resolve_attribution_target(question or None) or f"unsupported::{question}"
-    now = time.time()
-    hit = _ATTR_CACHE.get(key)
-    if hit and now - hit[0] < _ATTR_CACHE_TTL:
-        return hit[1]
-    provider = get_provider()
+app = FastAPI(title='Olist 数据工程与经营报表', version='3.0', lifespan=lifespan)
+
+
+@app.get('/api/health')
+def health():
+    # Startup detection must not wait for million-row metadata counts.
+    return {'status':'ok','app_version':'3.0'}
+
+
+def clean(value):
+    if isinstance(value, Decimal):
+        return float(value)
+    if isinstance(value, (date, datetime)):
+        return value.isoformat()
+    if isinstance(value, dict):
+        return {k: clean(v) for k,v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [clean(v) for v in value]
+    return value
+
+
+def response(value):
+    return JSONResponse(clean(value))
+
+
+@app.exception_handler(ValueError)
+async def invalid_request(request, error):
+    return JSONResponse({'detail': str(error)}, status_code=400)
+
+
+@app.exception_handler(KeyError)
+async def missing(request, error):
+    return JSONResponse({'detail': str(error)}, status_code=404)
+
+
+@app.exception_handler(pymysql.MySQLError)
+async def database_error(request, error):
+    code=error.args[0] if error.args else 'unknown'
+    return JSONResponse({'detail': f'数据库操作未完成（MySQL {code}），请检查数据库服务、表结构或连接权限。'},status_code=503)
+
+
+@app.get('/api/meta')
+def meta():
+    result = metadata(DATABASE)
+    result.update(app_version='3.0', source_dir=DATASET, files=[s.filename for s in CONTRACTS.values()])
+    return response(result)
+
+
+@app.get('/api/imports')
+def imports():
+    return response(store.list())
+
+
+@app.get('/api/imports/{batch}')
+def batch_details(batch: str):
+    return response(store.get(batch))
+
+
+class LocalBatch(BaseModel):
+    directory: str
+    label: str = ''
+    merge_mode: str = 'append_only'
+    snapshot_at: str | None = None
+
+
+@app.post('/api/imports/local')
+def local_import(body: LocalBatch):
+    directory = Path(body.directory)
+    if not directory.is_dir():
+        raise ValueError('源目录不存在')
+    if jobs.lock.locked():
+        raise ValueError('当前有数据任务正在执行')
+    stamp = validate_policy(body.merge_mode, body.snapshot_at)
+    row = store.create(directory, body.label)
+    row = store.update(row['id'], merge_mode=body.merge_mode, snapshot_at=stamp, database=DATABASE)
+    jobs.submit(jobs.prepare, row['id'])
+    return response(row)
+
+
+class UploadedBatch(BaseModel):
+    filenames: list[str]
+    label: str = ''
+    merge_mode: str = 'append_only'
+    snapshot_at: str | None = None
+
+
+@app.post('/api/imports/upload')
+def upload_batch(body: UploadedBatch):
+    expected = {s.filename for s in CONTRACTS.values()}
+    if len(body.filenames) != 9 or set(body.filenames) != expected:
+        raise ValueError('请一次选择九个标准命名的原始 CSV 文件')
+    stamp = validate_policy(body.merge_mode, body.snapshot_at)
+    row = store.create('', body.label)
+    target = store.root / row['id'] / 'source'
+    target.mkdir()
+    return response(store.update(row['id'], status='uploading', source=str(target), merge_mode=body.merge_mode, snapshot_at=stamp, database=DATABASE))
+
+
+@app.put('/api/imports/{batch}/files/{filename}')
+async def upload_file(batch: str, filename: str, request: Request):
+    row = store.get(batch)
+    if row['status'] != 'uploading' or filename not in {s.filename for s in CONTRACTS.values()}:
+        raise ValueError('当前批次不可上传此文件')
+    target = store.root / batch / 'source' / filename
+    part = target.with_suffix('.part')
+    size = 0
+    with part.open('wb') as file:
+        async for chunk in request.stream():
+            size += len(chunk)
+            if size > 2 * 1024**3:
+                raise ValueError('单文件超过 2 GiB 上限')
+            file.write(chunk)
+    part.replace(target)
+    return {'filename':filename,'bytes':size}
+
+
+@app.post('/api/imports/{batch}/validate')
+def validate_upload(batch: str):
+    if store.get(batch)['status'] != 'uploading':
+        raise ValueError('该批次不是待校验上传批次')
+    jobs.submit(jobs.prepare, batch)
+    return {'id':batch,'status':'validating'}
+
+
+@app.post('/api/imports/{batch}/execute')
+def execute(batch: str):
+    if store.get(batch)['status'] != 'ready':
+        raise ValueError('批次必须先通过源文件校验')
+    jobs.submit(jobs.execute, batch)
+    return {'id':batch,'status':'building'}
+
+
+@app.post('/api/imports/{batch}/rollback')
+def rollback_batch(batch: str):
+    row = store.get(batch)
+    if row['status'] != 'published':
+        raise ValueError('批次未发布或已回滚')
+    if not jobs.lock.acquire(blocking=False):
+        raise ValueError('数据任务执行中')
     try:
-        res = run_attribution(provider, get_semantic(), question=question or None)
+        rollback(DATABASE, batch, row['backup'])
+        return response(store.event(batch, '已恢复上一版三层数据', 100, status='rolled_back'))
     finally:
-        provider.close()
-    _ATTR_CACHE[key] = (now, res)
-    return res
+        jobs.lock.release()
 
 
-# ---------- 数据源（固定后端配置） ----------
-def get_semantic() -> SemanticLayer:
-    return SemanticLayer()
+@app.get('/api/maintenance/backups')
+def backup_preview(keep: int = 3):
+    return response(plan(store, DATABASE, keep))
 
 
-def get_provider():
-    """按后端配置创建数据源：USE_MYSQL=1 用 MySQL，否则演示样本 CSV。"""
-    if os.environ.get("USE_MYSQL") == "1":
-        try:
-            return MySQLProvider(allow_tables=get_semantic().allowed_tables())
-        except Exception as e:
-            raise RuntimeError(f"MySQL 连接失败: {e}（USE_MYSQL=1 但连接不可用）")
-    return ProjectCsvProvider()
+class Cleanup(BaseModel):
+    keep: int = 3
+    token: str
+    confirmed_schemas: list[str]
 
 
-def _clean(obj):
-    """递归把 numpy 标量 / datetime / 非有限浮点（inf/nan）转为 JSON 可表达类型。
-
-    注意：json.dumps 的 default 回调不会处理 inf（inf 是合法 float，dumps 直接抛错），
-    因此必须在序列化前递归清理。
-    """
-    if hasattr(obj, "item"):          # numpy 标量 → Python 标量
-        obj = obj.item()
-    if isinstance(obj, Decimal):
-        return float(obj)
-    if isinstance(obj, float):
-        return obj if math.isfinite(obj) else None   # inf/nan → null
-    if isinstance(obj, dict):
-        return {k: _clean(v) for k, v in obj.items()}
-    if isinstance(obj, (list, tuple)):
-        return [_clean(v) for v in obj]
-    if isinstance(obj, (int, bool)) or obj is None:
-        return obj
-    if hasattr(obj, "isoformat"):
-        return obj.isoformat()
-    return str(obj)
+@app.post('/api/maintenance/backups/prune')
+def backup_prune(body: Cleanup):
+    if not jobs.lock.acquire(blocking=False):
+        raise ValueError('数据任务执行中')
+    try:
+        return response(prune(store, DATABASE, body.keep, body.token, body.confirmed_schemas))
+    finally:
+        jobs.lock.release()
 
 
-def _json(res: dict) -> JSONResponse:
-    return JSONResponse(content=_clean(res))
+class TextRepair(BaseModel):
+    directory: str
+    token: str = ''
+    confirmed: bool = False
 
 
-class QuestionBody(BaseModel):
+@app.post('/api/maintenance/source-text/preview')
+def preview_text_repair(body: TextRepair):
+    return response(repair.preview(DATABASE,body.directory))
+
+
+@app.post('/api/maintenance/source-text/repair')
+def confirm_text_repair(body: TextRepair):
+    if not body.confirmed:raise ValueError('请先核对源文件证据、影响行数并确认字符修复')
+    if jobs.lock.locked():raise ValueError('数据任务执行中')
+    fresh=repair.preview(DATABASE,body.directory)
+    if not fresh['ready'] or body.token!=fresh['token']:raise ValueError('没有可修复差异或计划已变化，请重新预览')
+    row=store.create(body.directory,'旧导入字符修复')
+    store.update(row['id'],database=DATABASE,kind='source_text_repair',repair=fresh)
+    jobs.submit(repair.execute,jobs,row['id'],fresh)
+    return response({'id':row['id'],'status':'building'})
+
+
+@app.get('/api/reports/overview')
+def report_overview(start: str|None=None,end: str|None=None,state: str|None=None):
+    return response(overview(DATABASE,start,end,state))
+
+
+@app.get('/api/reports/growth')
+def report_growth(start: str|None=None,end: str|None=None,state: str|None=None,year_a:int=2017,year_b:int=2018,month_from:int=1,month_to:int=8):
+    return response(growth(DATABASE,start,end,state,year_a,year_b,month_from,month_to))
+
+
+@app.get('/api/exports/{table}')
+def export_mart(table: str):
+    if table not in MARTS:
+        raise ValueError('仅支持导出三张 Mart 表')
+    def stream():
+        with connect(DATABASE, stream=True) as conn, conn.cursor() as cur:
+            cur.execute(f'SELECT * FROM {ident(table)} ORDER BY order_id')
+            out = io.StringIO(newline='')
+            writer = csv.writer(out)
+            writer.writerow([column[0] for column in cur.description])
+            yield '\ufeff' + out.getvalue()
+            out.seek(0); out.truncate()
+            for row in cur:
+                writer.writerow(row.values())
+                if out.tell()>64*1024:
+                    yield out.getvalue()
+                    out.seek(0); out.truncate()
+            if out.tell():
+                yield out.getvalue()
+    return StreamingResponse(stream(), media_type='text/csv; charset=utf-8',headers={'Content-Disposition':f'attachment; filename="{table}.csv"'})
+
+
+class AgentTask(BaseModel):
     question: str
+    mode: str = 'query'
+    batch: str | None = None
+    consent: bool = False
+    share_results: bool = False
 
 
-# ---------- REST API ----------
-@app.post("/api/intent")
-def api_intent(body: QuestionBody):
-    return {"intent": Intent(get_semantic()).classify(body.question)}
+@app.get('/api/agent/settings')
+def agent_settings():
+    from agent_core.skills import SKILLS
+    return {**model_settings(), 'skills': SKILLS, 'query_row_limit': 5000,
+            'full_export':{'max_rows':2_000_000,'max_bytes':1024**3,'seconds':300,'preview_rows':50},
+            'engineering_scope': '已注册的 Olist 九表合约；候选库自主建模，用户确认发布'}
 
 
-@app.post("/api/query")
-def api_query(body: QuestionBody):
-    provider = get_provider()
-    try:
-        return _json(analyze_query_question(provider, get_semantic(), body.question))
-    finally:
-        provider.close()
+@app.get('/api/agent/tasks')
+def agent_tasks():
+    return response([agent.public(r) for r in agent.store.list()])
 
 
-@app.post("/api/statistical")
-def api_statistical(body: QuestionBody):
-    provider = get_provider()
-    try:
-        return _json(analyze_statistical_question(provider, body.question))
-    finally:
-        provider.close()
+@app.post('/api/agent/tasks')
+def create_agent_task(body: AgentTask):
+    return response(agent.start(body.question, body.mode, body.batch,
+                               consent=body.consent, share_results=body.share_results))
 
 
-@app.post("/api/attribution")
-def api_attribution(body: QuestionBody):
-    return _json(_cached_attribution(body.question or ""))
+@app.get('/api/agent/tasks/{task_id}')
+def get_agent_task(task_id: str):
+    return response(agent.public(agent.store.get(task_id)))
 
 
-@app.post("/api/deep-validation")
-def api_deep_validation(body: QuestionBody):
-    provider = get_provider()
-    try:
-        return _json(analyze_deep_validation(provider, body.question))
-    finally:
-        provider.close()
+class Clarification(BaseModel):
+    answer: str
+    consent: bool = False
 
 
-@app.get("/api/meta")
-def api_meta():
-    s = get_semantic()
-    provider_label = "MySQL" if os.environ.get("USE_MYSQL") == "1" else "演示样本(CSV)"
-    return _json({
-        "source_label": provider_label,
-        "tables": {
-            t: {
-                "desc": s.tables[t].get("desc", ""),
-                "metrics": s.get_metrics(t),
-                "dimensions": s.get_dimensions(t),
-                "filters": s.get_filters(t),
-            }
-            for t in s.table_names()
-        },
-        "guards": s.guards,
-    })
+@app.post('/api/agent/tasks/{task_id}/continue')
+def continue_agent_task(task_id: str, body: Clarification):
+    return response(agent.continue_task(task_id, body.answer, body.consent))
 
 
-# ---------- 总览看板（轻量、确定性、与归因同一口径） ----------
-@app.get("/api/dashboard")
-def api_dashboard():
-    """看板所需的 KPI、分组与月度趋势，全部走确定性 query_mart。
-
-    数据口径与低评分归因完全一致：baseline/factors 复用 attribution.build_baseline /
-    screen_factors（二者经 Tools.query_mart 统一附加 is_delivery_analysis_eligible=1
-    与 has_review_record=1 约束）；趋势/延迟率/平均评分也走同一 query_mart。
-
-    不运行耗时的 Logistic 推断，因此秒级返回，避免看板被分钟级归因拖住，也避免
-    归因失败时丢弃已算好的基线/分组，导致「有效样本/低评分率/州/支付」显示为 0。
-    """
-    semantic = get_semantic()
-    provider = get_provider()
-    tools = Tools(provider, semantic)
-    sqls: list[str] = []
-    try:
-        order_base = build_baseline(tools, ORDER_TABLE, ORDER_COUNT_METRIC)
-        sqls.append(order_base["sql"])
-        # 看板只用到客户州/支付方式分组 + 延迟分档/品类缺口提示，
-        # 不扫 is_late_delivery / order_month，避免无谓的 GROUP BY 查询。
-        order_groups = screen_factors(
-            tools, ORDER_TABLE,
-            ["delay_bucket", "customer_state", "primary_category_name",
-             "primary_payment_type"],
-            order_base["low_score_rate"], ORDER_COUNT_METRIC,
-            semantic.guards.get("min_group_sample", 100), sql_sink=sqls,
-        )
-
-        late = tools.query_mart(
-            ORDER_TABLE, metrics=["late_rate", ORDER_COUNT_METRIC], limit=1
-        )
-        sqls.append(late["sql"])
-        avg = tools.query_mart(
-            ORDER_TABLE, metrics=["avg_review_score", "reviewed_orders"], limit=1
-        )
-        sqls.append(avg["sql"])
-        handover = tools.query_mart(
-            SELLER_TABLE,
-            metrics=["handover_late_rate", SELLER_COUNT_METRIC],
-            limit=1,
-        )
-        sqls.append(handover["sql"])
-        trend = tools.query_mart(
-            ORDER_TABLE,
-            metrics=["low_score_rate", "avg_review_score", ORDER_COUNT_METRIC],
-            dimensions=["order_month"], limit=100,
-        )
-        sqls.append(trend["sql"])
-        late_trend = tools.query_mart(
-            ORDER_TABLE, metrics=["late_rate", ORDER_COUNT_METRIC],
-            dimensions=["order_month"], limit=100,
-        )
-        sqls.append(late_trend["sql"])
-        handover_trend = tools.query_mart(
-            SELLER_TABLE,
-            metrics=["handover_late_rate", SELLER_COUNT_METRIC],
-            dimensions=["order_month"], limit=100,
-        )
-        sqls.append(handover_trend["sql"])
-    finally:
-        provider.close()
-
-    late_rate = late["rows"][0]["_m_late_rate"] if late.get("ok") and late["rows"] else None
-    avg_score = (
-        avg["rows"][0]["_m_avg_review_score"] if avg.get("ok") and avg["rows"] else None
-    )
-    handover_rate = (
-        handover["rows"][0]["_m_handover_late_rate"]
-        if handover.get("ok") and handover["rows"] else None
-    )
-    return _json({
-        "ok": True,
-        "source_label": "MySQL" if os.environ.get("USE_MYSQL") == "1" else "演示样本(CSV)",
-        "baseline": {"order": order_base},
-        "factors": {"order": order_groups},
-        "late_rate": late_rate,
-        "late_sample": (
-            late["rows"][0][f"_m_{ORDER_COUNT_METRIC}"]
-            if late.get("ok") and late["rows"] else None
-        ),
-        "handover_late_rate": handover_rate,
-        "handover_sample": (
-            handover["rows"][0][f"_m_{SELLER_COUNT_METRIC}"]
-            if handover.get("ok") and handover["rows"] else None
-        ),
-        "avg_review_score": avg_score,
-        "avg_score_sample": (
-            avg["rows"][0]["_m_reviewed_orders"]
-            if avg.get("ok") and avg["rows"] else None
-        ),
-        "trend": trend["rows"] if trend.get("ok") else [],
-        "late_trend": late_trend["rows"] if late_trend.get("ok") else [],
-        "handover_trend": (
-            handover_trend["rows"] if handover_trend.get("ok") else []
-        ),
-        "sqls": sqls,
-    })
+class PublishConfirmation(BaseModel):
+    confirmed: bool = False
 
 
-# ---------- 会话历史（MySQL 持久化） ----------
-_session_store: SessionStore | None = None
+@app.post('/api/agent/tasks/{task_id}/publish')
+def publish_agent_task(task_id: str, body: PublishConfirmation):
+    if not body.confirmed:
+        raise ValueError('请确认候选SQL、校验结果与正式发布')
+    return response(agent.confirm_publish(task_id))
 
 
-def get_session_store() -> SessionStore:
-    global _session_store
-    if _session_store is None:
-        _session_store = SessionStore()
-    return _session_store
+@app.get('/api/agent/tasks/{task_id}/rollback-plan')
+def agent_rollback_preview(task_id: str):
+    return response(agent.rollback_plan(task_id))
 
 
-class SessionBody(BaseModel):
-    title: str = "新对话"
+class RollbackConfirmation(BaseModel):
+    token: str
+    confirmed: bool = False
 
 
-class MessagesBody(BaseModel):
-    messages: list[dict]
+@app.post('/api/agent/tasks/{task_id}/rollback')
+def rollback_agent_task(task_id: str,body:RollbackConfirmation):
+    return response(agent.confirm_rollback(task_id,body.token,body.confirmed))
 
 
-@app.get("/api/sessions")
-def api_list_sessions():
-    store = get_session_store()
-    try:
-        return _json({"ok": True, "sessions": store.list_sessions()})
-    finally:
-        store.close()
+@app.get('/api/agent/tasks/{task_id}/exports')
+def agent_exports(task_id: str):
+    return response(agent.exports.list(task_id))
 
 
-@app.post("/api/sessions")
-def api_create_session(body: SessionBody):
-    store = get_session_store()
-    try:
-        return _json({"ok": True, "session": store.create_session(body.title)})
-    finally:
-        store.close()
+@app.post('/api/agent/tasks/{task_id}/results/{result_id}/export-full')
+def full_query_export(task_id: str,result_id: str,body:PublishConfirmation):
+    return response(agent.exports.start(task_id,result_id,body.confirmed))
 
 
-@app.post("/api/sessions/{sid}/rename")
-def api_rename_session(sid: str, body: SessionBody):
-    store = get_session_store()
-    try:
-        if not store.rename_session(sid, body.title):
-            raise HTTPException(status_code=404, detail="会话不存在")
-        return {"ok": True}
-    finally:
-        store.close()
+@app.get('/api/agent/tasks/{task_id}/exports/{export_id}/csv')
+def full_export_download(task_id: str,export_id: str):
+    return FileResponse(agent.exports.artifact(task_id,export_id),media_type='text/csv',filename='full_query_'+export_id+'.csv')
 
 
-@app.delete("/api/sessions/{sid}")
-def api_delete_session(sid: str):
-    store = get_session_store()
-    try:
-        store.delete_session(sid)
-        return {"ok": True}
-    finally:
-        store.close()
+@app.get('/api/agent/tasks/{task_id}/results/{result_id}/csv')
+def agent_result_csv(task_id: str, result_id: str):
+    row = agent.store.get(task_id)
+    if result_id not in {r['id'] for r in row['queries']}:
+        raise ValueError('结果不存在')
+    return FileResponse(agent.store.root / task_id / result_id / 'result.csv',
+                        media_type='text/csv', filename='query_' + result_id + '.csv')
 
 
-@app.get("/api/sessions/{sid}/messages")
-def api_get_messages(sid: str):
-    store = get_session_store()
-    try:
-        return _json({"ok": True, "messages": store.get_messages(sid)})
-    finally:
-        store.close()
+@app.get('/api/agent/tasks/{task_id}/sql')
+def agent_generated_sql(task_id: str):
+    row = agent.store.get(task_id)
+    if not row['sql_log']:
+        raise ValueError('该任务未生成工程SQL')
+    return FileResponse(agent.store.root / task_id / 'generated.sql',
+                        media_type='text/plain', filename='generated_' + task_id + '.sql')
 
 
-@app.post("/api/sessions/{sid}/messages")
-def api_save_messages(sid: str, body: MessagesBody):
-    store = get_session_store()
-    try:
-        store.save_messages(sid, body.messages)
-        return {"ok": True}
-    finally:
-        store.close()
+dist = ROOT / 'web' / 'dist'
+if (dist / 'assets').is_dir():
+    app.mount('/assets', StaticFiles(directory=dist / 'assets'), name='assets')
 
 
-@app.post("/api/sessions/{sid}/messages/append")
-def api_append_messages(sid: str, body: MessagesBody):
-    store = get_session_store()
-    try:
-        store.append_messages(sid, body.messages)
-        return {"ok": True}
-    finally:
-        store.close()
-
-
-# ---------- SSE 流式对话 ----------
-def _sse(event: str, data) -> str:
-    payload = json.dumps(_clean(data), ensure_ascii=False)
-    return f"event: {event}\ndata: {payload}\n\n"
-
-
-def _react_answer(question: str, provider, semantic) -> dict:
-    """ReAct（LLM）兜底：确定性解析不完整/失败时回退智能推理。"""
-    try:
-        llm = create_llm()
-    except RuntimeError as e:
-        return {
-            "answer": f"未配置 DEEPSEEK_API_KEY，无法智能解析该问题（{e}）。",
-            "trace": [], "ok": False,
-        }
-    loop = ReActLoop(llm, provider, semantic)
-    return loop.run(question)
-
-
-@app.post("/api/chat")
-async def api_chat(body: QuestionBody):
-    async def gen() -> AsyncGenerator[str, None]:
-        semantic = get_semantic()
-        intent = Intent(semantic).classify(body.question)
-        yield _sse("intent", {"intent": intent})
-        provider = get_provider()
-        try:
-            if is_write_request(body.question):
-                yield _sse("answer", {
-                    "answer": (
-                        "当前 Agent 仅支持只读数据分析，不会执行删除数据库、删除/创建表、"
-                        "修改表结构或写入数据。可以继续询问数据质量、表结构、指标或统计分析问题。"
-                    ),
-                    "ok": False,
-                    "boundary": "read_only",
-                })
-            elif intent == "query":
-                # 确定性解析未识别（无指标）或不完整（有指标但丢维度）→ 回退 LLM
-                plan = plan_query_question(body.question, semantic)
-                if not plan.get("ok") or plan.get("incomplete"):
-                    yield _sse("running", {"stage": "智能解析中…"})
-                    res = _react_answer(body.question, provider, semantic)
-                    for t in res.get("trace", []):
-                        yield _sse("step", t)
-                    yield _sse("answer", {"answer": res.get("answer", ""),
-                                          "ok": res.get("ok", False)})
-                else:
-                    yield _sse("running", {"stage": "执行指标查询…"})
-                    res = analyze_query_question(provider, semantic, body.question)
-                    yield _sse("result", res)
-            elif intent == "statistical":
-                yield _sse("running", {"stage": "进行统计检验…"})
-                res = analyze_statistical_question(provider, body.question)
-                if res.get("ok") is False or res.get("error"):
-                    # 统计检验严格受变量注册表和分析粒度约束；边界失败必须明确拒绝，
-                    # 不能让 LLM 自由拼接表或编造不存在的变量。
-                    yield _sse("answer", {
-                        "answer": res.get("error", "当前问题不在受控统计分析范围内。"),
-                        "ok": False,
-                        "boundary": "controlled_statistics",
-                    })
-                else:
-                    yield _sse("result", res)
-            elif intent == "attribution":
-                yield _sse("running", {"stage": "进行关联因素筛选与调整后验证…"})
-                res = _cached_attribution(body.question)
-                if res.get("unsupported_target"):
-                    # 归因目标白名单是业务时序约束，不允许 LLM 临时替换结果变量。
-                    yield _sse("answer", {
-                        "answer": res.get("error", "当前归因目标不受支持。"),
-                        "ok": False,
-                        "boundary": "attribution_target_whitelist",
-                    })
-                else:
-                    yield _sse("result", res)
-            elif intent == "deep_validation":
-                yield _sse("running", {"stage": "进行深度验证…"})
-                res = analyze_deep_validation(provider, body.question)
-                if res.get("ok") is False or res.get("error"):
-                    yield _sse("answer", {
-                        "answer": res.get("error", "当前问题不在受控深度验证范围内。"),
-                        "ok": False,
-                        "boundary": "controlled_deep_validation",
-                    })
-                else:
-                    yield _sse("result", res)
-            else:
-                yield _sse("running", {"stage": "模型推理中…"})
-                res = _react_answer(body.question, provider, semantic)
-                for t in res.get("trace", []):
-                    yield _sse("step", t)
-                yield _sse("answer", {"answer": res.get("answer", ""),
-                                      "ok": res.get("ok", False)})
-        except Exception as e:
-            yield _sse("error", {"error": str(e), "type": type(e).__name__})
-        finally:
-            provider.close()
-        yield _sse("done", {})
-
-    return StreamingResponse(gen(), media_type="text/event-stream")
-
-
-# ---------- 生产：托管前端静态产物 ----------
-_WEB_DIST = ROOT / "web" / "dist"
-if _WEB_DIST.exists():
-    @app.exception_handler(StarletteHTTPException)
-    async def _spa_fallback(request, exc):
-        """SPA 前端路由（/dashboard、/chat 等）直接访问或刷新时回退到 index.html。
-
-        仅处理 404 且非 /api 的路径；API 路径保持原始 404 JSON 语义，避免把
-        不存在的接口误当成前端页面。
-        """
-        if exc.status_code == 404 and not request.url.path.startswith("/api"):
-            return FileResponse(_WEB_DIST / "index.html")
-        return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
-
-    app.mount("/", StaticFiles(directory=str(_WEB_DIST), html=True), name="web")
+@app.get('/{path:path}')
+def spa(path: str):
+    if path.startswith('api/'):
+        raise HTTPException(404, '接口不存在')
+    if not (dist / 'index.html').is_file():
+        raise HTTPException(503, '前端尚未构建')
+    return FileResponse(dist / 'index.html', headers={'Cache-Control':'no-cache'})

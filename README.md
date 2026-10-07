@@ -1,299 +1,167 @@
-# Olist 业务数据分析助手
+# Olist 数据工程与经营报表 Agent
 
-面向 Olist 电商履约与评分分析的自然语言指标查询、双变量检验和三目标关联因素分析工具。
+新版在原 `v2` 目录重建。现在同时提供确定性数据工程、LLM 自主数据工程、自然语言动态取数和 A / B 经营报表。固定工作流无需模型；AI 数据助手调用本地 `.env` 中配置的 DeepSeek，按注册 skill 检查输入/表结构、生成 SQL、调用工具并检查结果。
 
-基于已治理的三张分析宽表（Mart），由语义字典统一指标口径。常见指标查询和统计分析优先走确定性程序；只有规则无法可靠解析的问题才交给 DeepSeek/ReAct，从而兼顾可复现性与自然语言灵活性。每次查询保留来源 SQL，结果可对账。
+**最新验收（2026-10-04）：** 三项业务闭环缺口已补齐：完整查询CSV、AI发布版确认恢复、源证据限定的旧城市转义修复。U142/142；真实DeepSeek M82/82（75项取数、前置条件、3项工程、3项恢复保护），三次完整99,441行导出逐字段对账通过；源修复与完整恢复隔离验收4/4。正式库仅按已验证路径修正11个城市值，完整前版保留；M期间正式库校验和不变。详细证据、网页交互核验状态和保护预算见 [业务闭环补齐与验收](docs/业务闭环补齐与验收_20261004.md)。此前历史45,430→99,441单的真实LLM全量工程和内容对账另见 [上一轮完整验收](docs/真实模型完整验收_20261004.md)，不能将旧状态当作当前限制。
 
-## 当前版本状态
+## 数据来源与复现
 
-- 页面版本：`v2.0.0`（正式 UI：FastAPI + Vue3，企业级设计体系）
-- 数据源：演示样本（截取数据）/ 完整业务数据库（MySQL 全量）
-- 自动化分析范围：指标查询、单项/批量双变量统计检验、交接超期/最终延迟/低评分关联因素分析、指定变量补充验证、年份期间对比、金额/延迟数值筛选
-- 会话历史：MySQL 数据库持久化（`chat_session` / `chat_message`），跨设备保留，结果整份入库
-- 自动测试：`133 passed, 1 skipped`
-- 确定性核心评测：`117/117`
-- 完整数据库 U 验收：`32/32`（文档中两个不同问题均编号为 U-30，执行时记为 U-30A/U-30B）
-- 完整数据库 M 评测：43题×3轮共`129/129`通过；完成率与正确工具路径率均为`100%`，重复调用签名一致率`88.37%`
+原始数据来自 **Olist 在 Kaggle 发布的 [Brazilian E-Commerce Public Dataset by Olist](https://www.kaggle.com/datasets/olistbr/brazilian-ecommerce)**。当前版本以该数据集中的九张原始 CSV 为数据工程输入，不再依赖旧版预先导出的三张 Mart CSV。数据库中的 Raw、Staging 和 Mart 均由导入与建模流程生成；取数默认优先使用 Mart，必要时可回查其他授权层。
 
-```mermaid
-flowchart LR
-    Q["自然语言问题"] --> I["意图识别"]
-    I --> A["指标查询：确定性SQL"]
-    I --> B["双变量检验：按变量类型选择方法"]
-    I --> C["三目标归因：单变量筛选→多变量Logistic"]
-    I --> D["补充验证：指定变量＋线路跨时间验证"]
-    A --> E["规则无法可靠解析时才进入DeepSeek/ReAct"]
-```
+下载并解压后，保留以下标准文件名：
 
-## 环境要求
-- [uv](https://docs.astral.sh/uv/)（Python 项目管理）
-- Python（由 uv 自动管理）
+| 原始文件 | 业务内容 |
+|---|---|
+| `olist_orders_dataset.csv` | 订单、状态及生命周期时间 |
+| `olist_order_items_dataset.csv` | 订单商品项、卖家、商品金额及运费 |
+| `olist_order_payments_dataset.csv` | 支付方式、分期及支付金额 |
+| `olist_order_reviews_dataset.csv` | 订单评分及评价文本 |
+| `olist_customers_dataset.csv` | 客户标识及地区 |
+| `olist_products_dataset.csv` | 商品品类及物理属性 |
+| `olist_sellers_dataset.csv` | 卖家及地区 |
+| `olist_geolocation_dataset.csv` | 邮编地理位置 |
+| `product_category_name_translation.csv` | 商品品类的葡萄牙语—英语对照 |
 
-## 快速开始
+本仓库提供代码、SQL、运行时 skill 和复现文档；原始九表请从上述来源下载，不要求将本地数据、数据库备份或任务导出一起上传。将九个文件放在同一个本地目录，在 `.env` 中设置 `OLIST_SOURCE_DIR`，或者在数据工程页一次上传九个文件，随后按“导入一个新时间段”中的流程构建数据库。首次使用可以导入完整数据集；复现增量场景时，需要按订单关系准备分期批次，并保留其引用的维度记录。
 
-正式 UI 推荐后端 + 前端开发模式（或生产单端口）启动，详见下方"正式 UI"章节。
+数据集页面标注的许可为 [CC BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/)；数据的使用或再分发须遵守署名、非商业性使用和相同方式共享条件。公开可下载不等于可无条件用于商业业务。该许可属于上游数据，不代表本仓库代码已经授予相同许可；代码许可应由协作维护者另行明确。
 
-```powershell
-# 1. 初始化依赖（自动建 .venv）
-uv sync
+## 界面
 
-# 2. 运行单元与集成测试
-uv run pytest tests/ -v
+- **数据工程**：目录接入／浏览器上传、仅追加／带版本快照更新、字段与业务键校验、批次执行记录、合并计数、质量门、版本恢复、备份清理预览、三张 Mart CSV 导出。
+- **AI 数据助手**：自然语言动态 SELECT / CTE 取数、轻量结果及完整 CSV 导出；选择已校验九表批次，由 LLM 自主建立候选库、提交 Staging / Mart SQL、检查质量门，等待用户确认发布；当前 AI 发布版支持预览并确认恢复上一版。页面显示加载的 skill、工具轨迹、实际 SQL 和结果，不靠预设取数条件匹配问题。
+- **A · 经营总览**：已送达商品金额、订单数、客户数、商品客单价；商品金额、订单／客户及延迟／低评分月度趋势；分母样本数明细。
+- **B · 增长来源**：同月份窗口的两个年份对照及增幅、客单价与人均订单趋势、客户州／品类／卖家金额 Top 10，以及金额贡献、Top 1／Top 10 集中度和 HHI。
 
-# 3. 运行 117 项确定性核心评测（演示样本，不调用 API）
-uv run python tests/run_eval.py
+A / B 页参照 `Olist_经营总览.twb` 的计算字段及筛选关系。商品金额仅计已送达订单且不含运费；客户数使用 `customer_unique_id`。品类和卖家贡献来自商品项 Mart，避免将订单全部金额归给主要品类。月份与州筛选在两页共用；B 页同期窗口独立于趋势月份筛选。
 
-# 4. DeepSeek 重复稳定性评测（43 个自然语言问题，每题重复 3 次）
-uv run python tests/run_model_eval.py --repeat 3
+## 本机启动
 
-# 使用完整业务数据库执行同一套评测
-uv run python tests/run_model_eval.py --source mysql --repeat 3
+1. 启动 MySQL80 服务。
+2. 保留本目录 `.env` 的数据库连接配置。新环境复制 `.env.example` 为 `.env` 并填写 `DB_*`。
+3. 双击 `启动Agent.bat`，打开 `http://127.0.0.1:8000`。
 
-# Agent 启动且 USE_MYSQL=1 时，执行32项完整数据库 U 验收
-uv run python tests/run_u_acceptance.py
+AI 功能复用现有 `.env` 的 `DEEPSEEK_API_KEY`、`DEEPSEEK_BASE_URL`、`DEEPSEEK_MODEL`，不要用 `.env.example` 覆盖已有凭据。缺少配置时填写对应字段并重启服务；确定性流程和 A / B 报表不受影响。查询可选设置 `QUERY_DB_USER` / `QUERY_DB_PASSWORD` 为只具 SELECT 权限的专用账户；未设置时沿用现有连接，但仍有 AST 限制和 READ ONLY 事务。
 
-# 5. 命令行交互（未配置 key 时使用内置示例响应检查流程）
-uv run python run.py "请对低评分进行归因分析"
-uv run python run.py "请对延迟进行归因分析"
-uv run python run.py "哪些因素与交接超期有关？"
+## AI 数据助手怎么使用
 
-# 6. 正式 UI（FastAPI + Vue3，企业级设计体系）
-uv run uvicorn server.main:app --port 8000   # 后端 + 前端（生产单端口）
-# 前端开发模式：cd web && npm install && npm run dev（proxy /api → :8000）
-# 前端构建：cd web && npm run build（产物由后端自动托管）
-```
+1. **取数**：进入 `/agent`，选择“自然语言取数”，输入时间、对象、粒度与指标要求。例：“按月统计2018年上半年RJ州已送达订单的商品金额、订单数、低评分率，并按支付方式拆分”。条件不需预先登记；指标定义、表范围和权限有明确约束。
+2. **数据工程**：在数据工程页先上传或校验九张原始 CSV，不点击固定流程的发布按钮；到 AI 页选择该“待构建”批次，要求“合并本批次、按Olist skill生成并执行四张Staging和三张Mart的SQL，完成质量门，等待确认”。Raw CSV解析与增量合并继续由确定性工具完成；模型真正提交SQL构建后续层，而非只触发原来的固定SQL执行器。
+3. 模型任务启动前确认数据发送范围。默认只发送本次指令、字段结构、skill、校验摘要与工具状态，查询数据行留在本地；另勾选结果预览许可才发送每次最多50行。密码与API Key不交给模型。任务会消耗 API 额度，未提供自动成本上限，只有限定轮次/token预算。
+4. 轻量查询保存最多5,000行、页面预览50行，超限明确显示“截断”。需要全部明细时，在该结果点击“完整导出原始 SQL 结果”并确认：按当前发布版重新执行原始 SQL，保留用户明确的 LIMIT、OFFSET 与筛选，不使用轻量工具自动附加的 LIMIT。完整结果流式保存到本地，不发送给模型；最多200万行、1GiB、5分钟，超限/中断不提供部分文件。查看下载行数与版本标记，避免把旧预览当成同一版数据。CSV文本的潜在公式前缀会加单引号保护。
+5. 工程在 `_olist_work_<任务ID>` 候选库执行。除36项质量门外还检查表字段、主键粒度与InnoDB兼容性。正式库在确认发布前不变化；确认时复查基线校验和，其他更新会阻止旧候选覆盖。首次候选合并仍按现有增量政策，不由LLM推断缺失的更新时间或删除事件。
+6. 恢复 AI 发布版：选择状态“已发布”的工程任务，点击“预览恢复上一版”，核验质量门与影响后确认。仅当前版本可恢复；当前数据、备份或计划变化会拒绝旧确认。完整 Raw/Staging/Mart 与版本元数据一并恢复，当前版保留在恢复库。首次空库发布没有完整前版，不可恢复。
 
-Windows 本地环境配置完成后，可直接双击根目录的 `启动Agent.bat`；脚本会在后台启动服务并打开 `http://127.0.0.1:8000`。重复双击不会重复创建服务。
+技能说明在 `skills/data-retrieval/SKILL.md` 与 `skills/olist-engineering/SKILL.md`；由加载器读取全文并保存SHA-256，进入模型任务上下文，模型也可按需加载注册skill。工具由Python函数实现。允许模型自主规划不等于允许任意shell、root SQL或正式库写入。详见 [AI Agent新增架构与操作](docs/AI_Agent新增架构与操作.md)。
 
-DeepSeek重复评测会在每题结束后即时写入 `artifacts/evaluations/`。单题失败会记录意图、完成状态、工具路径和错误类型，并继续执行后续题目，不会终止整批评测。
-
-## 正式 UI（FastAPI + Vue3）
-
-正式界面为两页结构：
-
-### 总览看板 `/dashboard`
-- KPI 指标栏：低评分率 / 延迟率 / 有效样本 / 平均评分，含涨跌胶囊与迷你走势
-- 图表：客户州低评分率条形图（降序 + Top3 徽章 + 浅灰底槽 + 渐变胶囊）、支付方式环形图（加粗环体 + 中心大数字 + 2×2 卡片化图例）、月度趋势面积图（平滑曲线 + 深色 tooltip）
-
-### 智能对话 `/chat`
-- SSE 流式：`intent → running → result/step → answer → done`
-- 意图路由：指标查询 / 统计检验 / 归因分析 / 深度验证 / 智能对话（LLM 兜底）
-- 受控边界：未知字段、跨分析粒度、非白名单归因目标和写数据请求均由确定性程序直接说明，不会回退大模型或执行数据库变更
-- 结果卡片：归因 → 单变量筛选、共线性与控制变量、多变量 Logistic、稳定变量分布四段式证据链；低评分另提供线路/商品项描述性下钻；统计 → 单项检验显示方法/p值/效应量，批量检验逐项显示方法/原始p值/FDR校正p值/效应量；查询 → 指标卡 + 表格 + 来源 SQL
-- 会话管理：侧边栏新建/切换/删除 + 消息数；历史会话存 MySQL 数据库
-- 追问胶囊：卡片底部「查看月度趋势 / 查看各州分布」快捷追问
-
-### 会话历史（MySQL 持久化）
-- 表：`chat_session`（会话）+ `chat_message`（消息，结果以 JSON 存 LONGTEXT）
-- 首次启动自动建表；`useSessions` 从后端 API 读写，不再依赖 localStorage
-- 结果整份入库：query 等小结果恢复历史可还原完整表格；归因大结果也可完整存储
-
-### 偏难怪题探针
-`tests/edge_case_probe.py` 可直接调后端 `/api/chat` 批量测自然语言问题（intent / execution / answer），用于回归与验收，例：
-```powershell
-uv run python tests/edge_case_probe.py "运费 100 块以上的订单平均评分" "哪个品类容易给低分" "2020 年相比 2019 年低评分率变化"
-```
-
-## 接入 DeepSeek API
+首次安装：
 
 ```powershell
-# 推荐：复制示例配置并在本机填写，不要提交 .env
-Copy-Item .env.example .env
-
-# 在 .env 中填写
-DEEPSEEK_API_KEY=sk-xxxx
-DEEPSEEK_BASE_URL=https://api.deepseek.com
-DEEPSEEK_MODEL=deepseek-chat
+python -m venv .venv
+.venv\Scripts\python.exe -m pip install -r requirements.txt
+cd web
+pnpm install
+pnpm build
 ```
 
-配置后通过 OpenAI 兼容接口调用 `deepseek-chat`。未配置密钥时，确定性指标查询与统计分析仍可运行；只有规则无法可靠解析的开放式问题不能调用大模型。DeepSeek API密钥由本机`.env`读取；数据库密码可来自`.env`或当前页面会话，`.env`已被Git忽略。
+服务监听本机回环地址。数据库账户需要 SELECT、INSERT、UPDATE、CREATE、ALTER、DROP 和 RENAME TABLE 涉及的权限，以创建候选版本与恢复库。默认沿用本地 `olist_ecommerce`，也可在 `.env` 中指定新的 `DB_NAME`。
 
-批量统计检验可直接写成“目标变量与变量A、变量B、变量C分别是否有显著关系”。系统以第一个变量为检验目标，按各变量类型和可用分析粒度逐项选择检验方法，并对同一批p值执行FDR-BH校正；该路径完全由确定性程序执行，不依赖DeepSeek。例如：
+## 导入一个新时间段
+
+1. 在一个目录中放入九张标准命名的 CSV，或者在数据工程页一次选择九张文件上传。
+   默认选择“仅追加”，已有业务键发生有效内容变化会被拒绝；确需更新旧订单或维度时，选择“快照更新”并填写可信、带时区的源快照时间。它不是订单购买时间；必须晚于已发布快照水位。旧库首次快照更新建立水位基线，不能自动鉴别用户声明是否真实。
+2. 输入批次名称并点击“校验目录”／“上传并校验”。程序保存本批次源文件快照，以标准 CSV 规则处理引号、逗号、嵌入换行和反斜杠，并检查字段、类型、必填项、业务键冲突和取值范围。
+3. 检查逻辑记录数、时间范围与错误列表。校验通过后点击“合并、构建并发布”。
+4. 程序复制已有 Raw，合并新批次，在独立候选库运行三层 SQL，并验证关联、粒度、金额、最终评价和标记口径。
+5. FAIL 阻止发布；质量门通过后，单条 MySQL 8 原子 `RENAME TABLE` 同时切换九张 Raw、四张 Staging 和三张 Mart。刷新 A / B 报表即可看到扩展后的结果。
+
+新批次可以只有新增记录，也可以包含重叠历史快照。九个文件均需提供；没有本批次新增／更新记录的表可以只保留表头。客户、商品、卖家、翻译及地理表没有可靠时间字段，必须提供新增订单引用的维度数据，不能机械地按年份裁切每张表。
+
+### 合并语义
+
+| 表 | 业务键／合并规则 |
+|---|---|
+| orders | order_id；显式快照模式可更新状态和时间，保护 customer_id 与购买时间；阻止全部生命周期回退；delivered / canceled / unavailable 终结状态只能保持原状态；processing 与 invoiced 视为同级；空增量时间不清除已有时间 |
+| customers | customer_id |
+| order_items | order_id + order_item_id |
+| order_payments | order_id + payment_sequential |
+| products / sellers / category_translation | product_id / seller_id / product_category_name |
+| reviews / geolocation | 完整记录内容匹配；每种相同记录取历史与本批次重复次数的较大值，既防重叠导入膨胀，也保留原始合法重复次数 |
+
+同一有键记录在一个文件中出现不同内容会失败；跨批次覆盖必须显式选择快照更新并声明更晚的上游快照时间。源数据没有 `updated_at`，程序不能自动证明该声明，默认仅追加避免误覆盖。评价内容更新作为另一条完整记录保留，最终评价按回答时间等规则选择。CSV 不携带删除事件，缺失记录不意味着删除；当前不支持删除事件导入。
+
+地理位置和评价没有稳定业务唯一键，无法区分“新增且与历史完全相同的事件”和“重复快照”；这里采用保守的完整记录匹配规则。若后续接入真实业务系统，应由上游提供稳定记录 ID、更新时间和删除标记。
+
+## 数据建模
+
+`sql/` 保存原项目的四份构建 SQL，执行器忽略其中硬编码的 `USE olist_ecommerce`，所有构建语句在候选库运行。导入以参数化批量 INSERT 执行，规避原先 `LOAD DATA` 文本转义问题。
+
+- `01_create_database_and_tables.sql`：九张 Raw 的字段与粒度。
+- `04_create_staging_tables.sql`：邮编、订单支付、最终评价和订单商品聚合。
+- `06_create_mart_tables.sql`：订单级与订单—卖家级 Mart。
+- `11_create_operating_item_mart.sql`：商品项级 `mart_order_item_business`；这是现行 SQL 和 TWB 使用的第三张 Mart 名称。
+
+低评分为 ≤3 分，延迟按实际／预计送达的自然日判断。零金额分母的运费率为 NULL。完整金额对账在数据库 DECIMAL 上执行，展示时才转换为数值。
+
+新增数据在 Raw 层按键合并；相同文件指纹且构建签名一致时复用 Raw 快照；未受变更影响的 Staging 按依赖复用。合并没有新增／更新且规则未变时标记“未变化”，对账后沿用当前版本，不重建 Mart、不发布、不新增备份。业务数据有变化时 Mart 仍全量重建，以更新受维度变更影响的历史订单；不是 CDC 或变化订单级流式刷新。
+
+## 质量门与恢复
+
+36 项检查包含 Raw 引用完整性、已送达订单商品项完整性、取值范围、Staging 唯一粒度、Mart 行数保全、商品／运费／支付对账、最终评价选择、来源与延迟／低评分标记。缺少支付、时间异常、品类翻译和地理信息以 WARNING 保留。
+
+每个批次保存源文件 SHA-256、不可变输入快照、磁盘上的规范化记录、执行阶段、合并计数、质量报告。文件解析分块，键索引和规范化记录存 SQLite；没有全量 pandas 载入，也没有并行统计建模。一次只执行一个构建，数据库锁防止多个服务同时发布。
+
+发布前失败不影响正式表；发布后保存原表于 `_olist_backup_<批次ID>`。仅当前版本可恢复，旧备份必须包含完整三层表；恢复后的当前表保留在 `_olist_retired_<批次ID>`。首次新库没有完整前版，未变化批次也不产生可回滚的新版本。
+
+数据工程页提供备份清理预览，默认保留最近创建的三个已发布／已回滚批次的备份，并额外保护当前版本的上一版；只处理本批次审计库明确归属的精确备份库。用户确认后永久删除列出的目标，相应历史版本将不可恢复。未自动删除正式库、失败候选、恢复库、输入快照或旧代码备份，这些仍需单独保留政策。连接恢复后的成功轮询／刷新会清除旧连接提示，不清除任务失败记录。
+
+不支持同步其他工具在导入期间直接修改 Raw。此工作流假定本 Agent 是构建期间唯一 Raw 写入者；报表读取仍可正常运行。旧项目的非本工作流表与视图不在发布列表中，也不会自动刷新，分析应使用当前三张 Mart。
+
+### 旧版文本转义修复
+
+数据工程页新增“旧版城市文本修复”：以九表源目录中的卖家 CSV 为证据，仅接受旧 `LOAD DATA` 将字面量反斜杠+r误解为回车的城市差异。先显示源文件 SHA-256、旧/新值、各表影响行数；用户确认后克隆完整三层，只修正 Raw 卖家及对应卖家/商品项 Mart 的城市字段，通过36项质量门与基线复查才原子发布。键、邮编、州及任何其他内容差异均拒绝；不是通用覆盖接口，不修改上游快照水位。完整前版可从批次记录恢复。
+
+## 测试
+
+```powershell
+.venv\Scripts\python.exe -m pip install pytest httpx
+.venv\Scripts\python.exe -m pytest -q -p no:cacheprovider --basetemp artifacts/test_tmp
+$env:OLIST_TEST_MYSQL='1'
+.venv\Scripts\python.exe -m pytest -q -p no:cacheprovider --basetemp artifacts/test_tmp
+.venv\Scripts\python.exe scripts\run_task_acceptance.py
+.venv\Scripts\python.exe scripts\verify_incremental.py
+
+# 经允许发送测试数据后，真实DeepSeek取数三轮（产生API费用）
+.venv\Scripts\python.exe scripts\run_llm_eval.py --allow-model-data --repeat 3
+# 真实模型隔离库工程验收；不与U/M-F构建同时运行
+.venv\Scripts\python.exe scripts\run_llm_eval.py --allow-model-data --engineering-only --engineering --full-engineering
+# 真实模型三轮取数＋完整明细导出＋首次/增量/重叠及AI恢复
+.venv\Scripts\python.exe scripts\run_llm_eval.py --allow-model-data --repeat 3 --engineering --business-gaps
+# 历史转义缺口的全量克隆、修复、逐字段对账与恢复（零模型调用）
+.venv\Scripts\python.exe scripts\verify_source_repair.py
+```
+
+默认测试不要求数据库；设置 `OLIST_TEST_MYSQL=1` 后增加隔离库中的状态更新、空时间保护、文本回写和重复合并测试。全量验收用原始九表生成 2018 年前／2018 年及以后批次，在 `olist_verify_*` 独立数据库执行：时间扩展、完整快照重复导入、三层行数与金额对账、报表贡献总额对账、失败批次隔离和原子回滚。输出在 `artifacts/engineering/verification_*/acceptance.json`，测试库和候选／恢复库保留，不修改 `DB_NAME` 指向的正式库。
+
+`run_task_acceptance.py` 通过独立服务的实际 HTTP 接口验收目录接入、九文件上传、后台构建、重复导入、错误拦截、版本恢复、报表与三张 Mart 导出；使用 `olist_accept_*` 隔离库，不修改正式库或 `.env`。结果输出到 `artifacts/engineering/task_acceptance_*/acceptance.json`。不要与正式页面的数据构建同时运行。详见 [任务验收与复测指南](docs/任务验收与复测指南.md)。
+
+`artifacts/test_tmp` 是测试专用临时目录，pytest 会在新一轮测试开始时清理它，不要在其中存放业务文件。已完成的测试记录见 [验收结果](docs/验收结果.md)。
+
+## 目录
 
 ```text
-是否延迟与品类、运费率、商品项数量、是否多卖家订单、是否跨州、是否存在交接超期、线路分别有显著关系？
+engineering/      CSV 合约、流式校验、增量合并、质量门与版本化构建
+server/           FastAPI、上传与批次 API、报表与 Mart 导出
+agent_core/       LLM 工具调用循环、skill加载、SQL AST校验与候选库工具
+skills/           动态取数及Olist数据工程的运行时技能指引
+sql/              原项目构建 SQL
+web/src/          数据工程、AI 数据助手与 A / B 固定报表
+tests/            解析、指标与增量行为验证
+scripts/          启动与全量数据验收
+docs/             原项目数据工程指引及新版设计说明
+artifacts/        批次记录、运行日志与旧版备份
 ```
 
-### 三个归因目标及时间顺序
+旧版归因、统计问答与旧测试入口仍不在运行路径中。重建前的代码、文档和配置保存于 `artifacts/legacy_backup/`，本地凭据、数据集和 v1 保留。此次新增LLM工程/取数不是恢复旧归因模块；旧 M 模型测试不直接适用。
 
-归因不是任意字段间的自动建模。系统只开放三个有明确业务时序的二分类目标，并禁止把目标发生后的结果变量反向当作原因：
-
-- 是否交接超期：只筛选订单、商品、承诺时效与运输地理等事前基础属性。
-- 是否最终延迟：筛选基础属性与交接超期；不纳入低评分。
-- 是否低评分：筛选基础属性、交接超期与最终延迟。
-
-三个目标使用同一证据链：按变量类型执行单变量检验 → FDR-BH 与效应量95%CI双门槛 → 共线性组保留预设直观代表 → 多变量二项Logistic（HC3稳健标准误） → 再次执行FDR与CI门槛 → 展示稳定变量对应的目标发生率分布。结果只说明观察性关联，不自动生成治理策略。
-
-## 随仓库提供的数据
-
-- `data/sample/`：每张表约1,000行的截取样本，用于离线演示和快速自动测试。
-- `data/full/`：从Olist公共数据构建的三张完整Mart表，可用于重建MySQL分析层或直接复现实验。
-
-| 文件 | 分析粒度 | 数据行数 | 大小 |
-|---|---|---:|---:|
-| `mart_order_delivery.csv` | 订单级 | 99,441 | 48.20 MB |
-| `mart_order_seller_delivery.csv` | 订单-卖家级 | 100,010 | 45.47 MB |
-| `mart_order_item_business.csv` | 商品项级 | 112,650 | 34.46 MB |
-
-完整文件的校验值和使用说明见 [`data/full/README.md`](data/full/README.md)。CSV含匿名业务标识，不包含本机数据库密码或DeepSeek API密钥。
-
-## 项目结构
-
-```text
-olist-qa-agent/
-├─ pyproject.toml            # uv 配置
-├─ run.py                    # 命令行交互入口
-├─ data/
-│  ├─ sample/                # 三张 Mart 截取样本（随仓库提交）
-│  └─ full/                  # 三张完整 Mart CSV
-├─ artifacts/                # 程序生成的评测结果与运行日志
-│  ├─ evaluations/
-│  └─ runtime_logs/
-├─ semantics/
-│  └─ metrics_dict.yaml      # 语义字典（唯一真相源，锁死口径）
-├─ config/
-│  └─ recommendation_rules.yml # 历史规则文件；当前分析流程不调用
-├─ agent_core/
-│  ├─ semantic.py            # 加载语义字典
-│  ├─ data_provider.py       # 数据访问抽象（演示样本/完整MySQL数据库）
-│  ├─ statistical_analysis.py# 统计入口（兼容现有调用）
-│  ├─ bivariate_analysis.py  # 任意两个受控业务变量的规划与检验
-│  ├─ query_analysis.py      # 常见指标/分组/排名/筛选/期间对比的确定性取数
-│  ├─ low_score_attribution.py # 低评分单变量筛选 + 共线性处理 + 多变量Logistic
-│  ├─ deep_validation.py     # 指定变量补充验证 + 线路跨时间验证
-│  ├─ tools.py               # 工具层：query_mart / top_n 等
-│  ├─ intent.py              # 意图识别骨架
-│  ├─ llm.py                 # 大模型客户端（DeepSeek / 测试替身）
-│  └─ loop.py                # 自建 ReAct 循环
-├─ server/
-│  ├─ main.py                # FastAPI 路由 + SSE 对话 + 静态托管（正式 UI 后端）
-│  └─ session_store.py       # 会话历史 MySQL 存取（chat_session / chat_message）
-├─ semantics/
-│  └─ metrics_dict.yaml      # 语义字典（唯一真相源，锁死口径）
-├─ web/                      # 正式 UI 前端（Vue3 + Vite + TS + Element Plus + ECharts）
-│  └─ src/
-│     ├─ views/              # ChatView / DashboardView
-│     ├─ layouts/            # AppLayout（侧边栏 + 顶部栏）
-│     ├─ components/         # ResultCard / DataTable / MarkdownText / charts
-│     └─ composables/        # useSessions（会话状态，后端持久化）
-├─ docs/
-│  ├─ design/                # 架构方案、框架评估与变更设计
-│  └─ guides/                # 部署、协作、故障分析、交接说明
-├─ scripts/                  # 启动辅助脚本
-└─ tests/
-   ├─ eval_questions.yml     # 117 项确定性核心评测
-   ├─ model_eval_questions.yml # 43 个真实表达问题
-   ├─ manual_acceptance_questions.md # 完整数据库页面验收清单
-   ├─ edge_case_probe.py     # 偏难怪题批量探针（直接调 /api/chat）
-   ├─ run_u_acceptance.py    # 32项完整数据库U场景自动验收
-   ├─ run_model_eval.py      # DeepSeek重复稳定性与延迟评测
-   ├─ TEST_LOG.md            # 测试记录台账（§1–§35）
-   └─ test_m1.py             # 对账 + 端到端测试
-```
-
-## 设计要点
-
-- **语义字典锁口径**：指标/维度必须来自 `metrics_dict.yaml`，模型只能"选"不能"编"
-- **结构化 SQL**：`query_mart` 用模板生成 SQL，杜绝自由 join 与语法错误
-- **可对账**：每次查询附来源 SQL，自动测试对演示样本执行“工具结果 vs 直接 SQL 重算”一致性校验
-- **两种数据源**：演示样本用于功能检查与回归测试；只读 MySQL 完整业务数据库用于全量分析
-- **三张 Mart 分工**：订单表、订单-卖家表和商品项表分别保持自身粒度；双变量分析只在存在共同受控粒度时执行，避免一对多连接制造重复样本
-- **通用双变量统计路由**：不再把评价固定为结果变量；可检验金额×运费、时长×线路、跨州×时长、品类×支付方式等组合，并按变量类型固定选择卡方、Fisher、趋势检验、Mann–Whitney U、Spearman 或 Kruskal–Wallis
-- **常见取数不依赖API**：明确的指标、分组和排名问题由本地规则映射到语义字典并直接查询；只有无法可靠解析的问题才回退DeepSeek
-- **分析目标固定且有时序**：当前自动化关联因素分析只支持交接超期、最终延迟和低评分；每个目标只能使用其发生前的候选变量，其他结果变量可先进行双变量检验或指标查询
-- **两阶段统计流程**：先进行单变量检验，仅保留FDR校正后p<0.05且效应量95%CI排除无效值的变量；随后处理共线性并运行采用HC3稳健标准误的多变量Logistic模型
-- **固定控制与结果输出**：订单级和订单-卖家级分别使用预设控制变量；只有控制其他因素后仍满足FDR显著性与置信区间标准的变量才展示分布和对象明细
-- **负载受控**：分类变量先在数据库端聚合，连续变量每次只读取目标与一个特征；两个调整模型按Mart粒度串行读取必要字段，不把三张全量Mart同时载入内存
-- **指定变量补充验证**：明确写出“深度验证/调整后/控制混杂”可验证指定变量；高风险线路另外使用较晚时期订单进行跨时间验证
-- **不自动生成策略**：关联因素分析和补充验证只报告统计关联、置信区间与具体分布，不生成责任方、治理动作、监控指标或A/B方案
-- **商品项显著性**：品类和商品按去重订单构造“是否包含该对象×是否低评分”的2×2检验，并用FDR-BH控制多重比较；样本不足时明确不下结论
-- **模型稳定性单独衡量**：确定性测试与 DeepSeek 重复评测分开，后者报告完成率、正确工具路径率、重复一致率和 P50/P95 延迟
-
-## 接入完整业务数据库
-
-项目支持切换到完整 MySQL 业务数据库（`MySQLProvider`，pymysql 只读 + 白名单 + 限行）。演示样本用于快速回归，全量业务结论使用完整数据库：
-
-```bash
-# 1. 在 .env 填入数据库连接信息
-DB_HOST=你的主机
-DB_PORT=3306
-DB_USER=你的账号
-DB_PASSWORD=你的密码
-DB_NAME=你的库名
-DB_ITEM_TABLE=商品项分析宽表的实际表名
-USE_MYSQL=1
-
-# 2. 使用完整数据库运行关联因素分析（--source mysql）
-uv run python run.py --source mysql "对低评分进行归因"
-uv run python run.py --source mysql "对延迟进行归因"
-uv run python run.py --source mysql "对交接超期进行归因"
-```
-
-当前读取层已适配三张分析宽表，并通过只读派生字段补齐月份、延迟分档和线路，不会修改数据库对象。
-
-如果数据库中已经存在三张治理完成的 Mart 表，只需配置上述连接参数，不要运行 `scripts/import_mart_to_mysql.py`。该脚本仅用于从 CSV 重建表，且必须显式传入 `--replace` 才会执行覆盖。
-
-## 完整数据库评测记录
-
-运行命令：
-
-```powershell
-.venv\Scripts\python.exe tests\run_model_eval.py --source mysql --repeat 3
-```
-
-注意：`--source mysql`的DeepSeek评测会向外部API发送模型作答所需的SQL与查询结果，不会发送数据库密码；运行前应确认数据发送范围符合使用要求。
-
-2026-08-17评测使用99,441条订单级记录、100,010条订单-卖家级记录和112,650条商品项级记录，共执行123次：
-
-| 指标 | 结果 |
-|---|---:|
-| 意图识别准确率 | 100.00% |
-| 回答完成率 | 99.19%（122/123） |
-| 正确工具路径率 | 99.19%（122/123） |
-| 重复路径一致率 | 80.49%（33/41题） |
-| DeepSeek调用完成率 | 98.67%（74/75） |
-| 响应时间P50 / P95 | 5.449秒 / 88.302秒 |
-
-唯一失败为M-16第3轮：数据库查询成功，DeepSeek生成回答时发生`APITimeoutError`。同一问题使用网页实际采用的确定性取数路径复测成功，耗时0.585秒，因此该失败属于模型压力测试路径，而不是数据库查询失败。
-
-2026-08-21 新增 M-41～M-43，对延迟归因、交接超期归因和越界目标拒绝进行了完整数据库专项验收：`3/3`通过，且`llm_runs=0`。延迟归因首次运行约97.87秒，交接超期约25.20秒；两者均按既定业务时序生成候选变量，模型公式未包含目标发生后的变量。
-
-2026-08-21 完成全部 U 手工场景修复后复验：完整 MySQL 数据源 `32/32` 通过；自动化回归 `133 passed, 1 skipped`；确定性核心评测 `117/117`；受本次修改影响的 M-31/M-34/M-35/M-43 各重复3次，共 `12/12` 通过。最终记录见 [`artifacts/evaluations/u_acceptance_20260821_final.md`](artifacts/evaluations/u_acceptance_20260821_final.md)。
-
-2026-08-21 随后执行完整 MU 发布前验收：M 43题×3轮共`129/129`通过，意图准确率、完成率、正确工具路径率及75次DeepSeek调用完成率均为`100%`，P50/P95为`5.989/91.668秒`；U 32项为`32/32`。5道M题出现附加指标或等价工具的调用签名变化，因此重复签名一致率为`88.37%`，但目标指标、维度和结果路径均正确。汇总见 [`artifacts/evaluations/mu_full_mysql_20260821.md`](artifacts/evaluations/mu_full_mysql_20260821.md)。
-
-- 原始记录：[`artifacts/evaluations/mysql_model_eval_20260817_full.json`](artifacts/evaluations/mysql_model_eval_20260817_full.json)
-- 中文总结：[`artifacts/evaluations/mysql_model_eval_20260817_full_summary.md`](artifacts/evaluations/mysql_model_eval_20260817_full_summary.md)
-
-## 已知限制与后续重点
-
-- 当前自动化关联因素分析只支持“是否交接超期、是否最终延迟、是否低评分（1–3分）”三个目标；其他目标不会自动套用这套模型。
-- Mart不含评价正文、商品破损、错发、客服沟通、承运商和天气等信息，仍存在残余混杂与原因缺口。
-- 完整数据库归因首次运行约25–98秒（视目标与入模特征数而定）；后端已有按目标区分的24小时结果缓存和模型矩阵缓存。
-- 8/41题存在调用签名波动，主要是DeepSeek偶尔附加订单量、低评分数等非必要辅助指标；目标指标和分组维度仍正确。
-- 统计显著只说明观察性关联，不代表因果；系统不自动生成责任归属或治理策略。
-- **正式 UI 依赖 MySQL 服务运行**：会话历史、看板、对话取数都走数据库，MySQL 未启动会导致 500。
-- **历史会话不自动补全**：会话数据库化之前（localStorage 时代）存的归因会话 result 为空，重新提问才完整。
-- **前端开发模式访问用 `http://localhost:5173`**（Vite 绑定 IPv6），`127.0.0.1:5173` 不可达。
-
-## 文档入口
-
-- 文档索引：[`docs/README.md`](docs/README.md)
-- 本地部署与数据源切换：[`docs/guides/本地部署与使用说明.md`](docs/guides/本地部署与使用说明.md)
-- 交接说明（最近阶段工作）：[`docs/guides/交接说明-最近阶段工作.md`](docs/guides/交接说明-最近阶段工作.md)
-- 手工验收问题：[`tests/manual_acceptance_questions.md`](tests/manual_acceptance_questions.md)
-- 自动测试记录：[`tests/TEST_LOG.md`](tests/TEST_LOG.md)
-- M评测范围与判定标准：[`tests/benchmark_questions.md`](tests/benchmark_questions.md)
-
-## 路线图
-
-- M1（L1 问数）：语义字典 + 工具层 + ReAct 循环 + 对账测试 ✅
-- M2（L2 描述性归因）：候选因素扫描 + Lift/超额低评分 + P0/P1/P2 + route 线路深挖 ✅
-- M3（统计验证）：低负载卡方/趋势/MWU/Spearman + FDR与效应量95%CI；三个有时间顺序的归因目标自动运行受控Logistic ✅
-- M4（输出与评测）：调整后仍显著变量的分布/对象明细，策略输出关闭 + 117 项确定性核心评测 ✅
-- 稳定性评测：43 个真实表达问题，可配置题号和重复次数并输出 JSON 报告 ✅
-- 接入完整 MySQL 数据库：`MySQLProvider` 已实现；页面输入密码后读取三张全量分析宽表 ✅
-- 正式 UI（FastAPI + Vue3）：看板 + 对话 + SSE 流式 + 结果卡片 ✅
-- 会话历史 MySQL 持久化：跨设备保留、结果整份入库、侧边栏会话管理 ✅
-- 看板/对话高质感重构：图表美学 + Top3 徽章 + 2×2 图例 + 追问胶囊 + 矢量头像 ✅
-- 年份期间对比 / 金额延迟筛选 / 偏难怪题批量探针与回归 ✅
+详细架构、Agent／skill／tool／工作流概念、技术栈和功能实现见 [Agent详细说明](docs/Agent详细说明.md)。测试区分U代码回归、M-F固定工程任务验收和M-LLM实际模型验收。后者使用`scripts/run_llm_eval.py`真实调用.env配置的DeepSeek，以独立SQL参照核对动态取数，并在隔离库验证自主建模；需先取得模型数据发送许可。脚本模型及本地SQL参照不能代替真实模型测试。详见 [MU测试指南](docs/MU测试指南.md)，不沿用旧归因Agent的模型通过率。
